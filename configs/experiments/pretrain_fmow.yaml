@@ -1,0 +1,73 @@
+DATASET_NAME: "fmow"
+MODEL_NAMES: ["resnet50"]
+DOMAIN_TYPE: "countries"
+
+PRETRAIN_DOMAINS:
+  # Top-25 countries (0 to 24)
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+
+DATA_DIR: ./data
+CHECKPOINT_ROOT: ./results/pretrain/fmow/checkpoints
+LOG_ROOT: ./results/pretrain/fmow/logs
+
+TRAIN_BATCH_SIZE: 64
+EVAL_BATCH_SIZE: 256
+NUM_WORKERS: 8
+PIN_MEMORY: true
+
+MODEL_NAME: "resnet50"
+DEFAULT_LEARNING_RATE: 1e-3
+DEFAULT_NUM_EPOCHS: 50
+DEFAULT_OPTIMIZER: "SGD"
+DEFAULT_WEIGHT_DECAY: 1e-4
+DEFAULT_SCHEDULER: "step"
+DEFAULT_GAMMA: 0.1
+DEFAULT_MOMENTUM: 0.9
+
+PATIENCE: 10
+START_FROM_EPOCH: 0
+
+MODELS:
+  resnet50:
+    LEARNING_RATE: 1e-3
+    NUM_EPOCHS: 50
+    OPTIMIZER: "SGD"
+    WEIGHT_DECAY: 1e-4
+    SCHEDULER: "step"
+    MOMENTUM: 0.9
+    STEP_SIZE: 30
+
+MODEL_SEEDS: [48329, 17046, 62984, 31507, 90861]
+
+DEVICE: cuda
+CUDNN_DETERMINISTIC: true
+
+TEMPORAL_FILTER:
+  # Only use 2016-2017 data
+  enabled: true
+  years: [14.0, 15.0]
+

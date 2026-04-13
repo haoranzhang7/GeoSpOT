@@ -1,0 +1,165 @@
+
+DATASET_NAME: "geoyfcc_text"
+MODEL_NAMES: ["bert_singlelabel"]
+DOMAIN_TYPE: "countries"
+
+NUM_DOMAINS: 62
+
+PRETRAIN_DOMAINS:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 56
+  - 57
+  - 58
+  - 59
+  - 60
+  - 61
+
+TARGET_DOMAINS:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 56
+  - 57
+  - 58
+  - 59
+  - 60
+  - 61
+
+DATA_DIR: ./data
+CHECKPOINT_ROOT: ./results/pretrain/checkpoints
+LOG_ROOT: ./results/zeroshot/logs
+RESULTS_ROOT: ./results/zeroshot/test_results
+
+EVAL_BATCH_SIZE: 512
+NUM_WORKERS: 16
+PIN_MEMORY: true
+
+MODEL_NAME: "bert_singlelabel"
+
+MODEL_SEEDS: [48329, 17046, 62984, 31507, 90861]
+
+MODELS:
+  bert_singlelabel:
+    LEARNING_RATE: 2e-5
+    NUM_EPOCHS: 50
+    OPTIMIZER: "AdamW"
+    WEIGHT_DECAY: 0.01
+    SCHEDULER: "cosine"
+
+DEVICE: cuda
+CUDNN_DETERMINISTIC: true
+CUDNN_BENCHMARK: false
+
+TRAIN_BATCH_SIZE: 64
+PATIENCE: 10
+START_FROM_EPOCH: 20
+
+LOG_LEVEL: INFO

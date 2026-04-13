@@ -1,0 +1,40 @@
+PATHS:
+  data_root: "./data"
+  project_root: "."
+  results_root: "./results"
+  zeroshot_results_dir: ./results/zeroshot/fmow
+
+DATASET:
+  gen_name: "fmow"
+  name: "fmow"
+  total_domains: 25  # Top-25 countries
+  source_domains: [0, 1, 2, 3, 4]  # Example source domains (adjust as needed)
+  target_domains: [5, 6, 7, 8, 9]  # Example target domains (adjust as needed)
+
+EXPERIMENT:
+  name: "zeroshot_fmow"
+  type: "zeroshot_evaluation"
+
+MODEL:
+  name: "resnet50"
+  checkpoint_dir: ./results/pretrain/fmow/checkpoints
+  # Use pretrained model from specific domains
+  pretrain_domains: [0, 1, 2, 3, 4]
+
+EVALUATION:
+  batch_size: 256
+  num_workers: 8
+  splits: ["val", "test"]
+
+COMPUTATION:
+  device: "cuda"
+  num_workers: 8
+  pin_memory: true
+
+MODEL_SEEDS: [48329, 17046, 62984, 31507, 90861]
+
+TEMPORAL_FILTER:
+  # Only use 2016-2017 data
+  enabled: true
+  years: [14.0, 15.0]
+

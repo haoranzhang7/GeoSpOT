@@ -1,0 +1,58 @@
+PATHS:
+  data_root: "./data"
+  project_root: "."
+  results_root: "./results"
+  ot_distance_dir: ./data/geoyfcc/distances/ot_distance/
+
+DATASET:
+  gen_name: "geoyfcc"
+  name: "geoyfcc_text"
+  total_domains: 62
+
+EXPERIMENT:
+  name: "ot_distance_lambda_grid"
+  type: "distance_computation"
+
+OT_CONFIG:
+  method: "sinkhorn"
+  reg_e: 0.01
+  max_iter: 1000
+  metric: "cosine"
+  normalize_cost: "max_per_domain_and_normalized_after"
+  force_recompute: false
+
+DOMAIN_SELECTION:
+  k: 1
+  greedy_sequential: false
+
+EMBEDDING_TYPES:
+  combined:
+    - "bert+geoclip"
+    - "bert+satclip_L40"
+    - "bert+geodesic"
+  include_geodesic: false
+  include_combined: true
+
+LAMBDA_GRID:
+  lambdas:
+    - 0.1
+    - 0.2
+    - 0.3
+    - 0.4
+    - 0.5
+    - 0.6
+    - 0.7
+    - 0.8
+    - 0.9
+
+COMPUTATION:
+  batch_size: 1000
+  max_memory_gb: 16
+  device: "cuda"
+  num_workers: 16
+
+PERFORMANCE:
+  enable_caching: true
+  cache_cleanup: false
+  memory_cleanup: true
+  parallel_processing: true

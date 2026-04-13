@@ -1,0 +1,59 @@
+PATHS:
+  data_root: "./data"
+  project_root: "."
+  results_root: "./results"
+  ot_distance_dir: ./data/fmow/distances/ot_distance/
+
+DATASET:
+  gen_name: "fmow"
+  name: "fmow"
+  total_domains: 25  # Top-25 countries
+  source_domains: [0, 1, 2, 3, 4]  # Example: specific source domains to process
+
+EXPERIMENT:
+  name: "ot_distance_fmow"
+  type: "distance_computation"
+
+OT_CONFIG:
+  method: "sinkhorn"
+  reg_e: 0.01
+  max_iter: 1000
+  metric: "cosine"
+  normalize_cost: "max_per_domain"
+  force_recompute: false
+
+DOMAIN_SELECTION:
+  k: 5
+  greedy_sequential: true
+
+EMBEDDING_TYPES:
+  individual:
+    - "resnet50"
+    - "geoclip"
+    - "satclip_L10"
+    - "satclip_L40"
+  combined:
+    - "resnet50+geoclip"
+    - "resnet50+satclip_L10"
+    - "resnet50+satclip_L40"
+    - "resnet50+geodesic"
+  include_geodesic: true
+  include_combined: true
+
+COMPUTATION:
+  batch_size: 1000
+  max_memory_gb: 16
+  device: "cuda"
+  num_workers: 8
+
+PERFORMANCE:
+  enable_caching: true
+  cache_cleanup: false
+  memory_cleanup: true
+  parallel_processing: true
+
+TEMPORAL_FILTER:
+  # Only use 2016-2017 data
+  enabled: true
+  years: [14.0, 15.0]
+

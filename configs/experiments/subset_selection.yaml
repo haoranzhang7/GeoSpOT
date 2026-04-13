@@ -1,0 +1,129 @@
+DATASET_NAME: "geoyfcc_text"
+MODEL_NAMES: ["bert_singlelabel"]
+DOMAIN_TYPE: "countries"
+
+PRETRAIN_DOMAINS:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 56
+  - 57
+  - 58
+  - 59
+  - 60
+  - 61
+
+
+DATA_DIR: ./data/
+OT_DISTANCE_DIR: ./data/geoyfcc/distances/ot_distance/
+CHECKPOINT_ROOT: ./results/subset/checkpoints
+LOG_ROOT: ./results/subset/logs
+RESULTS_ROOT: ./results/subset/test_results
+ZEROSHOT_CSV: ./results/zeroshot/test_results/subset_zeroshot_results.csv
+
+TRAIN_BATCH_SIZE: 64
+EVAL_BATCH_SIZE: 512
+NUM_WORKERS: 16
+PIN_MEMORY: true
+
+MODEL_NAME: "bert_singlelabel"
+DEFAULT_LEARNING_RATE: 2e-5
+DEFAULT_NUM_EPOCHS: 50
+DEFAULT_OPTIMIZER: "AdamW"
+DEFAULT_WEIGHT_DECAY: 0.01
+DEFAULT_SCHEDULER: "cosine"
+DEFAULT_GAMMA: 0.1
+
+PATIENCE: 10
+START_FROM_EPOCH: 20
+
+MODELS:
+  bert_singlelabel:
+    LEARNING_RATE: 2e-5
+    NUM_EPOCHS: 50
+    OPTIMIZER: "AdamW"
+    WEIGHT_DECAY: 0.01
+    SCHEDULER: "cosine"
+
+DEVICE: cuda
+CUDNN_DETERMINISTIC: true
+CUDNN_BENCHMARK: false
+
+LOG_LEVEL: INFO
+PRINT_FREQ: 10
+SAVE_FREQ: 5
+
+EVAL_DURING_TRAINING: true
+EVAL_FREQ: 1
+
+TARGET_DOMAINS: [57, 12, 34]
+K_VALUES: [1, 2, 5]
+BUDGET_VALUES: [2000, 5000, 10000]
+VAL_SIZE_MAPPING:
+  2000: 1000
+  5000: 2500
+  10000: 5000
+
+DOMAIN_METHODS: ["ot", "global", "random"]
+
+OT_EMBEDDING_TYPES: ["bert", "geoclip", "satclip_L40", "geodesic"]
+OT_METHOD: "sinkhorn"
+OT_REG_E: 0.01
+OT_MAX_ITER: 1000
+OT_METRIC: "cosine"
+OT_NORMALIZE_COST: "max_per_domain"
+
+MODEL_DATA_SEEDS: [6651033, 9272605, 1206448, 2180968, 114325]

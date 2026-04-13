@@ -1,0 +1,105 @@
+DATASET_NAME: "geoyfcc_image"
+MODEL_NAMES: ["resnet50"]
+DOMAIN_TYPE: "countries"
+
+PRETRAIN_DOMAINS:
+  # All 62 countries (0 to 61)
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 21
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 28
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 35
+  - 36
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 56
+  - 57
+  - 58
+  - 59
+  - 60
+  - 61
+
+DATA_DIR: ./data
+CHECKPOINT_ROOT: ./results/pretrain/geoyfcc_image/checkpoints
+LOG_ROOT: ./results/pretrain/geoyfcc_image/logs
+
+TRAIN_BATCH_SIZE: 64
+EVAL_BATCH_SIZE: 256
+NUM_WORKERS: 8
+PIN_MEMORY: true
+
+MODEL_NAME: "resnet50"
+DEFAULT_LEARNING_RATE: 1e-3
+DEFAULT_NUM_EPOCHS: 50
+DEFAULT_OPTIMIZER: "SGD"
+DEFAULT_WEIGHT_DECAY: 1e-4
+DEFAULT_SCHEDULER: "step"
+DEFAULT_GAMMA: 0.1
+DEFAULT_MOMENTUM: 0.9
+
+PATIENCE: 10
+START_FROM_EPOCH: 0
+
+MODELS:
+  resnet50:
+    LEARNING_RATE: 1e-3
+    NUM_EPOCHS: 50
+    OPTIMIZER: "SGD"
+    WEIGHT_DECAY: 1e-4
+    SCHEDULER: "step"
+    MOMENTUM: 0.9
+    STEP_SIZE: 30
+
+MODEL_SEEDS: [48329, 17046, 62984, 31507, 90861]
+
+DEVICE: cuda
+CUDNN_DETERMINISTIC: true
+

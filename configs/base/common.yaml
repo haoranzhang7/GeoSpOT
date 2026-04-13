@@ -1,0 +1,23 @@
+
+# This file contains common settings used across all experiments
+PATHS:
+  data_root: "./data"
+  project_root: "."
+  results_root: "./results"
+
+DATASET_COMMON:
+  domain_type: "countries"
+  splits: ["train", "val", "test"]
+  
+MODEL_COMMON:
+  device: "cuda"
+  
+LOGGING:
+  level: "INFO"
+  save_intermediate: true
+  verbose: true
+  
+COMPUTATION:
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
