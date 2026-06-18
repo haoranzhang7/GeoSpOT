@@ -7,8 +7,8 @@ import os
 import json
 import time
 import gc
+import copy
 import argparse
-import yaml
 from pathlib import Path
 from itertools import combinations
 import sys
@@ -23,180 +23,49 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from datasets.geoyfcc.geoyfcc import GeoYFCCText
 
-from compute_distances.core.ot_distance import (
-    OTConfig,
+from compute_distances.ot_distance import (
     compute_ot_distance,
     compute_combined_ot_distance,
-    get_cosine_cost_matrix_min_max_chunked,
+    cosine_distance_minmax,
+    haversine_distance,
+)
+from compute_distances.utils import (
     save_ot_distance,
     load_ot_distance,
     get_ot_distance_cache_path,
-    combine_domain_embeddings
 )
 
-# ==================== Configuration Loading ====================
+device = dataset = domains = None
+_coordinate_cache = {}
 
-def load_config(config_path: str) -> dict:
-    """Load configuration from YAML file."""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
-
-def load_base_config() -> dict:
-    """Load base configuration."""
-    base_config_path = PROJECT_ROOT / "configs" / "base" / "common.yaml"
-    return load_config(str(base_config_path))
-
-def load_dataset_config() -> dict:
-    """Load dataset configuration."""
-    dataset_config_path = PROJECT_ROOT / "configs" / "datasets" / "geoyfcc.yaml"
-    return load_config(str(dataset_config_path))
-
-def load_experiment_config(config_path: str) -> dict:
-    """Load experiment configuration."""
-    return load_config(config_path)
-
-def merge_configs(base_config: dict, dataset_config: dict, experiment_config: dict) -> dict:
-    """Merge configurations with proper inheritance."""
-    merged = {}
-    
-    # Start with base config
-    merged.update(base_config)
-    
-    # Override with dataset config
-    for key, value in dataset_config.items():
-        if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
-            merged[key].update(value)
-        else:
-            merged[key] = value
-    
-    # Override with experiment config
-    for key, value in experiment_config.items():
-        if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
-            merged[key].update(value)
-        else:
-            merged[key] = value
-    
-    return merged
-
-# Global config variables (set by main function)
-base_config = None
-dataset_config = None
-config = None
-
-# ==================== Constants ====================
-
-COUNTRY_MAPPING_PATH = Path("./data/geoyfcc/country_mapping.json")
-
-# ==================== Setup ====================
-
-def initialize_from_config(config: dict):
-    """Initialize global variables from configuration."""
+def initialize(args):
+    """Initialize global dataset/device state from CLI args."""
     global device, dataset, domains, _coordinate_cache
-    
-    # Set device
-    device_name = config.get('COMPUTATION', {}).get('device', 'cuda')
-    device = torch.device(device_name if torch.cuda.is_available() else 'cpu')
+
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
-    # Load dataset
-    data_dir = config['PATHS']['data_root']
-    dataset_name = config['DATASET']['gen_name']
-    dataset_path = f"{data_dir}/{dataset_name}"
-    
-    dataset = GeoYFCCText(root=dataset_path, split='train')
+
+    dataset = GeoYFCCText(root=f"{args.data_root}/{args.dataset_name}", split='train')
     domains = np.array(list(dataset.df["country_id"]))
-    
-    # Initialize coordinate cache
     _coordinate_cache = {}
 
+def load_country_mapping(args) -> dict:
+    path = Path(args.data_root) / "geoyfcc" / "country_mapping.json"
+    if not path.exists():
+        print(f"Warning: Country mapping file not found at {path}")
+        return {}
+    try:
+        with open(path, 'r') as f:
+            return {int(k): v for k, v in json.load(f).items()}
+    except Exception as e:
+        print(f"Warning: Could not load country mapping from {path}: {e}")
+        return {}
 
-def load_country_mapping() -> dict:
-    country_mapping = {}
-    if COUNTRY_MAPPING_PATH.exists():
-        try:
-            with open(COUNTRY_MAPPING_PATH, 'r') as f:
-                country_mapping_str = json.load(f)
-                country_mapping = {int(k): v for k, v in country_mapping_str.items()}
-        except Exception as e:
-            print(f"Warning: Could not load country mapping from {COUNTRY_MAPPING_PATH}: {e}")
-    else:
-        print(f"Warning: Country mapping file not found at {COUNTRY_MAPPING_PATH}")
-    return country_mapping
+def get_embedding_path(args, embedding_type) -> Path:
+    return Path(args.data_root) / args.dataset_name / "embeddings" / f"{embedding_type}.pt"
 
-def get_data_dir(config) -> Path:
-    """Get data directory from config."""
-    # Try different possible locations for data directory
-    if 'PATHS' in config and 'data_root' in config['PATHS']:
-        return Path(config['PATHS']['data_root'])
-    elif 'DATASET' in config and 'data_dir' in config['DATASET']:
-        return Path(config['DATASET']['data_dir'])
-    else:
-        return Path("./data")
-
-def get_dataset_name(config) -> str:
-    """Get dataset name from config."""
-    return config['DATASET']['gen_name']
-
-def get_result_dir(config: dict) -> Path:
-    """Get result directory from config."""
-    data_dir = get_data_dir(config)
-    dataset_name = get_dataset_name(config)
-    return data_dir / dataset_name / "distances" / "ot_distance"
-
-def get_ot_config(config) -> OTConfig:
-    """Get OT configuration from config."""
-    ot_config_dict = config.get('OT_CONFIG', {})
-    return OTConfig(
-        reg_e=ot_config_dict.get('reg_e', 0.01),
-        max_iter=ot_config_dict.get('max_iter', 1000),
-        normalize_cost=ot_config_dict.get('normalize_cost', 'max'),
-        method=ot_config_dict.get('method', 'sinkhorn'),
-        metric=ot_config_dict.get('metric', 'cosine')
-    )
-
-def get_embedding_path_template(config) -> Path:
-    """Get embedding path template from config."""
-    data_dir = get_data_dir(config)
-    dataset_name = get_dataset_name(config)
-    return data_dir / dataset_name / "embeddings" / "{embedding_type}.pt"
-
-def get_embedding_types(config: dict) -> list:
-    """Get embedding types from config."""
-    embedding_config = config.get('EMBEDDING_TYPES', {})
-    return embedding_config.get('individual', ["bert", "geoclip", "satclip_L10", "satclip_L40"])
-
-def get_combined_embedding_types(config: dict) -> list:
-    """Get combined embedding types from config."""
-    embedding_config = config.get('EMBEDDING_TYPES', {})
-    return embedding_config.get('combined', ["bert+geoclip", "bert+satclip_L10", "bert+satclip_L40", "bert+geodesic"])
-
-def should_include_geodesic(config: dict) -> bool:
-    """Check if geodesic should be included."""
-    embedding_config = config.get('EMBEDDING_TYPES', {})
-    return embedding_config.get('include_geodesic', True)
-
-def should_include_combined(config: dict) -> bool:
-    """Check if combined embeddings should be included."""
-    embedding_config = config.get('EMBEDDING_TYPES', {})
-    return embedding_config.get('include_combined', True)
-
-def get_k_value(config: dict) -> int:
-    """Get K value from config."""
-    domain_config = config.get('DOMAIN_SELECTION', {})
-    return domain_config.get('k', 1)
-
-def should_use_greedy_sequential(config: dict) -> bool:
-    """Check if greedy sequential selection should be used."""
-    domain_config = config.get('DOMAIN_SELECTION', {})
-    return domain_config.get('greedy_sequential', False)
-
-def should_force_recompute(config: dict) -> bool:
-    """Check if recomputation should be forced."""
-    ot_config_dict = config.get('OT_CONFIG', {})
-    return ot_config_dict.get('force_recompute', False)
-
-# ==================== Helper Functions ====================
+def get_result_dir(args) -> Path:
+    return Path(args.data_root) / args.dataset_name / "distances" / "ot_distance"
 
 def extract_domain_embeddings(embeddings, domains_array, domain_idx, embedding_type=None):
     """Extract embeddings for a specific domain"""
@@ -205,365 +74,262 @@ def extract_domain_embeddings(embeddings, domains_array, domain_idx, embedding_t
         if embedding_type == "geodesic":
             return extract_domain_coordinates(dataset, domains_array, domain_idx)
         embeddings = embeddings[embedding_type]
-    domain_mask = domains_array == domain_idx
-    domain_embeddings = embeddings[domain_mask]
-    # print(f"  Domain {domain_idx}: {len(domain_embeddings)} samples")
-    return domain_embeddings
+    return embeddings[domains_array == domain_idx]
 
 def extract_domain_coordinates(dataset, domains_array, domain_idx):
     """Extract lat/lon coordinates for a specific domain with caching and GPU acceleration"""
-    global _coordinate_cache
-    
-    # Check cache first
     if domain_idx in _coordinate_cache:
         return _coordinate_cache[domain_idx]
-    
-    domain_mask = domains_array == domain_idx
-    domain_df = dataset.df[domain_mask]
-    
-    # Get coordinates and filter out NaN values
-    coords = domain_df[['lat', 'lon']].dropna()
+
+    coords = dataset.df[domains_array == domain_idx][['lat', 'lon']].dropna()
     if len(coords) == 0:
         print(f"Warning: No valid coordinates found for domain {domain_idx}")
-        empty_tensor = torch.tensor([], dtype=torch.float32, device=device)
-        _coordinate_cache[domain_idx] = empty_tensor
-        return empty_tensor
-    
-    # Convert to tensor [lat, lon] format and move to GPU
-    coords_tensor = torch.tensor(coords.values, dtype=torch.float32, device=device)
-    print(f"  Domain {domain_idx}: {len(coords_tensor)} samples with coordinates")
-    
-    # Cache the result
+        coords_tensor = torch.tensor([], dtype=torch.float32, device=device)
+    else:
+        coords_tensor = torch.tensor(coords.values, dtype=torch.float32, device=device)
+        print(f"  Domain {domain_idx}: {len(coords_tensor)} samples with coordinates")
+
     _coordinate_cache[domain_idx] = coords_tensor
     return coords_tensor
 
 def clear_coordinate_cache():
     """Clear the coordinate cache to free GPU memory"""
-    global _coordinate_cache
-    for coords in _coordinate_cache.values():
-        if coords.numel() > 0:  # Only delete non-empty tensors
-            del coords
     _coordinate_cache.clear()
     torch.cuda.empty_cache()
     print("Coordinate cache cleared")
 
-def get_cost_constants(embedding_type):
+def get_cost_constants(embedding_type, args):
     """Get or compute min/max cost constants for normalization"""
     if embedding_type == "geodesic":
-        return get_geodesic_cost_constants()
-    
+        return get_geodesic_cost_constants(args)
 
-    
-    # Get paths from config
-    data_dir = get_data_dir(config)
-    dataset_name = get_dataset_name(config)
-    embedding_path_template = get_embedding_path_template(config)
-    
-    cost_matrix_data_path = data_dir / dataset_name / f"{embedding_type}_cost_matrix_data.json"
-    
-    if cost_matrix_data_path.exists():
-        with open(cost_matrix_data_path, 'r') as f:
+    path = Path(args.data_root) / args.dataset_name / f"{embedding_type}_cost_matrix_data.json"
+    if path.exists():
+        with open(path, 'r') as f:
             data = json.load(f)
             return data['cost_max'], data['cost_min']
-    
-    # Compute if not cached
-    embedding_path = Path(str(embedding_path_template).format(embedding_type=embedding_type))
-    embeddings = torch.load(embedding_path, map_location="cuda")
-    min_val, max_val = get_cosine_cost_matrix_min_max_chunked(embeddings, embeddings)
-    
-    cost_matrix_data_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(cost_matrix_data_path, 'w') as f:
+
+    embeddings = torch.load(get_embedding_path(args, embedding_type), map_location="cuda")
+    min_val, max_val = cosine_distance_minmax(embeddings, embeddings)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as f:
         json.dump({'cost_min': float(min_val), 'cost_max': float(max_val)}, f, indent=2)
-    
-    # Cleanup embeddings immediately after use
+
     del embeddings
     torch.cuda.empty_cache()
     gc.collect()
-    
+
     return max_val, min_val
 
-def get_geodesic_cost_constants(batch_size=20000, force_recompute=False):
+def get_geodesic_cost_constants(args, batch_size=20000, force_recompute=False):
     """Get or compute min/max cost constants for geodesic distance"""
-    # Get paths from config
-    print("Getting Geodesice Cost Constants...")
-    data_dir = get_data_dir(config)
-    dataset_name = get_dataset_name(config)
-    cost_matrix_data_path = data_dir / dataset_name / "geodesic_cost_matrix_data.json"
-    
-    if cost_matrix_data_path.exists() and not force_recompute:
-        with open(cost_matrix_data_path, 'r') as f:
+    print("Getting Geodesic Cost Constants...")
+    path = Path(args.data_root) / args.dataset_name / "geodesic_cost_matrix_data.json"
+
+    if path.exists() and not force_recompute:
+        with open(path, 'r') as f:
             data = json.load(f)
         return data['cost_max'], data['cost_min']
-    
-    # If not found, compute from all domains using coordinates
+
     print("Computing geodesic cost constants from lat/lon coordinates...")
-    total_domains = config['DATASET']['total_domains']
-    all_domain_indices = list(range(total_domains))
-    
-    # Collect all coordinates from all domains
-    all_coords = []
-    for domain_idx in all_domain_indices:
-        coords = extract_domain_coordinates(dataset, domains, domain_idx)
-        if len(coords) > 0:
-            all_coords.append(coords)
-    
+    all_coords = [c for idx in range(args.total_domains)
+                  if len(c := extract_domain_coordinates(dataset, domains, idx)) > 0]
+
     if not all_coords:
         raise ValueError("Warning: No valid coordinates found for any domain")
-    
-    # Combine all coordinates into one tensor
+
     all_coords_tensor = torch.cat(all_coords, dim=0)
     device = all_coords_tensor.device
     n = len(all_coords_tensor)
 
     print(f"Computing geodesic distances for {n} coordinates (batched)...")
 
-    from compute_distances.core.ot_distance import haversine_distance_torch_optimized
-
-    # Instead of allocating full n×n, compute min/max incrementally
     global_min = float("inf")
     global_max = float("-inf")
 
     with torch.no_grad():
-        outer_range = range(0, n, batch_size)
-        for i in tqdm(outer_range, desc="Computing geodesic batches (outer)", leave=True):
+        for i in tqdm(range(0, n, batch_size), desc="Computing geodesic batches (outer)", leave=True):
             end_i = min(i + batch_size, n)
             batch_i = all_coords_tensor[i:end_i]
-            
-            inner_range = range(0, n, batch_size)
-            for j in tqdm(inner_range, desc=f"  Inner loop for batch {i//batch_size+1}", leave=False):
+
+            for j in tqdm(range(0, n, batch_size), desc=f"  Inner loop for batch {i//batch_size+1}", leave=False):
                 end_j = min(j + batch_size, n)
-                batch_j = all_coords_tensor[j:end_j]
+                dists = haversine_distance(batch_i, all_coords_tensor[j:end_j])
 
-                dists = haversine_distance_torch_optimized(batch_i, batch_j)
-
-                # Remove self-distances if diagonal block
                 if i == j:
                     mask = ~torch.eye(end_i - i, dtype=torch.bool, device=device)
                     dists = dists[mask]
 
-                block_min = dists.min().item()
-                block_max = dists.max().item()
-
-                if block_min < global_min:
-                    global_min = block_min
-                if block_max > global_max:
-                    global_max = block_max
+                global_min = min(global_min, dists.min().item())
+                global_max = max(global_max, dists.max().item())
 
                 del dists
                 torch.cuda.empty_cache()
 
     print(f"Geodesic cost constants: min={global_min:.2f} km, max={global_max:.2f} km")
 
-    # Save for future use
-    cost_data = {'cost_min': global_min, 'cost_max': global_max}
-    cost_matrix_data_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(cost_matrix_data_path, 'w') as f:
-        json.dump(cost_data, f, indent=2)
-    
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump({'cost_min': global_min, 'cost_max': global_max}, f, indent=2)
+
     del all_coords_tensor
     torch.cuda.empty_cache()
     gc.collect()
-    
+
     return global_max, global_min
 
-
-def compute_or_load_distance(src_data, tgt_domain_indices, embeddings_or_dataset, domains,
-                            embedding_type, max_const, min_const, ot_config, source_domain_idx, force_recompute=False,
-                            include_greedy_sequential_str=False, lambda_param=None):
+def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_dataset, domains,
+                              embedding_type, max_const, min_const, source_domain_idx,
+                              include_greedy_sequential_str=False, lambda_param=None):
     """Compute or load cached OT distance"""
 
-    result_dir = get_result_dir(config)
+    result_dir = get_result_dir(args)
+    lambda_for_cache = lambda_param if "+" in embedding_type else None
+
+    ot_args = copy.copy(args)
+    ot_args.metric = "geodesic" if embedding_type == "geodesic" else args.metric
+
     cache_path = get_ot_distance_cache_path(
         result_dir=str(result_dir),
         embedding_type=embedding_type,
         src_idx=source_domain_idx,
         tgt_idx=tgt_domain_indices,
-        config=ot_config,
+        ot_args=ot_args,
         include_greedy_sequential_str=include_greedy_sequential_str,
-        lambda_param=lambda_param
+        lambda_param=lambda_for_cache,
     )
-    
-    # Check cache
-    if os.path.exists(cache_path) and not force_recompute:
+
+    if os.path.exists(cache_path) and not args.force_recompute:
         cache_data = load_ot_distance(cache_path)
         print(f"Loaded from cache {cache_path}", flush=True)
         if cache_data:
             return cache_data['distance'], True
-    elif force_recompute and os.path.exists(cache_path):
+    elif args.force_recompute and os.path.exists(cache_path):
         print(f"Force recompute enabled - ignoring cache {cache_path}", flush=True)
-    
-    # Compute distance based on embedding type
+
+    t0 = time.time()
     if embedding_type == "geodesic":
-        # Use coordinates for geodesic distance
-        tgt_coords_list = [extract_domain_coordinates(embeddings_or_dataset, domains, idx) 
-                          for idx in tgt_domain_indices]
-        tgt_coords = torch.cat(tgt_coords_list, dim=0)
-        
-        distance, comp_time = compute_ot_distance(
-            src_data, tgt_coords,
-            config=ot_config,
-            max_constant=max_const,
-            min_constant=min_const
-        )
-        
-        # Cleanup
-        del tgt_coords_list, tgt_coords
+        tgt_coords = torch.cat([extract_domain_coordinates(embeddings_or_dataset, domains, idx)
+                                 for idx in tgt_domain_indices], dim=0)
+        ot_args.max_constant, ot_args.min_constant = max_const, min_const
+        distance = compute_ot_distance(src_data, tgt_coords, ot_args)
     elif "+" in embedding_type:
-        embedding_types = embedding_type.split("+")
-        tgt_embeddings_dict = {}
-        for embedding_type in embedding_types:
-            tgt_embeddings_list = [extract_domain_embeddings(embeddings_or_dataset, domains, idx, embedding_type) 
-                              for idx in tgt_domain_indices]
-            tgt_embeddings = torch.cat(tgt_embeddings_list, dim=0)
-            tgt_embeddings_dict[embedding_type] = tgt_embeddings
-            
-        # Handle combined embedding types
-        # Get lambda_param from global scope (set in main)
-        distance, comp_time = compute_combined_ot_distance(src_data, tgt_embeddings_dict, ot_config, max_const, min_const, lambda_param=lambda_param)
-        print(f"Computed combined distance: {distance}", flush=True)
-        
-        # Cleanup combined embeddings
-        del tgt_embeddings_dict
-    else:
-        # Use embeddings for other distance types
-        tgt_embeddings_list = [extract_domain_embeddings(embeddings_or_dataset, domains, idx) 
-                              for idx in tgt_domain_indices]
-        tgt_embeddings = torch.cat(tgt_embeddings_list, dim=0)
-        
-        distance, comp_time = compute_ot_distance(
-            src_data, tgt_embeddings,
-            config=ot_config,
-            max_constant=max_const,
-            min_constant=min_const
+        emb_type_1, emb_type_2 = embedding_type.split("+")
+
+        tgt_emb_1 = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx, emb_type_1)
+                                for idx in tgt_domain_indices], dim=0)
+        tgt_emb_2 = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx, emb_type_2)
+                                for idx in tgt_domain_indices], dim=0)
+
+        cost_args_1 = copy.copy(args)
+        cost_args_1.metric = "geodesic" if emb_type_1 == "geodesic" else args.metric
+        cost_args_1.max_constant, cost_args_1.min_constant = max_const[emb_type_1], min_const[emb_type_1]
+
+        cost_args_2 = copy.copy(args)
+        cost_args_2.metric = "geodesic" if emb_type_2 == "geodesic" else args.metric
+        cost_args_2.max_constant, cost_args_2.min_constant = max_const[emb_type_2], min_const[emb_type_2]
+
+        ot_args.lambda_param = lambda_param if lambda_param is not None else 0.5
+        ot_args.normalize_after = args.normalize_after
+
+        distance = compute_combined_ot_distance(
+            src_data[emb_type_1], src_data[emb_type_2],
+            tgt_emb_1, tgt_emb_2,
+            cost_args_1, cost_args_2, ot_args
         )
-        
-        # Cleanup
-        del tgt_embeddings_list, tgt_embeddings
-    
-    # Save to cache
+        print(f"Computed combined distance: {distance}", flush=True)
+    else:
+        tgt_embeddings = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx)
+                                     for idx in tgt_domain_indices], dim=0)
+        ot_args.max_constant, ot_args.min_constant = max_const, min_const
+        distance = compute_ot_distance(src_data, tgt_embeddings, ot_args)
+    comp_time = time.time() - t0
+
     metadata = {
         'src_domain_idx': source_domain_idx,
         'tgt_domain_indices': tgt_domain_indices,
         'embedding_type': embedding_type,
-        'method': ot_config.method,
-        'reg_e': ot_config.reg_e,
-        'max_iter': ot_config.max_iter,
-        'metric': ot_config.metric if embedding_type != "geodesic" else getattr(ot_config, 'metric_geodesic', 'geodesic'),
-        'normalize_cost': ot_config.normalize_cost,
+        'method': args.method,
+        'reg_e': args.reg_e,
+        'max_iter': args.max_iter,
+        'metric': ot_args.metric,
+        'normalize_cost': args.normalize_cost,
         'computation_time': comp_time,
-        'src_shape': list(src_data.shape) if not isinstance(src_data, dict) else [src_data[embedding_type].shape for embedding_type in src_data.keys()],
+        'src_shape': list(src_data.shape) if not isinstance(src_data, dict) else {k: list(v.shape) for k, v in src_data.items()},
         'timestamp': time.time()
     }
-    
-    # Ensure directory exists and save
+
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     save_ot_distance(cache_path, distance, metadata)
-    
-    # Aggressive cleanup to free memory
+
     torch.cuda.empty_cache()
     gc.collect()
 
     print(f"Distance computed {distance} for {embedding_type} from {source_domain_idx} to {tgt_domain_indices}")
-    
+
     return distance, False
 
-def greedy_sequential_ot_selection(src_data, all_domain_indices, data_source, domains, 
-                                 embedding_type, max_const, min_const, ot_config, k, 
-                                 source_domain_idx, force_recompute=False, lambda_param=None):
-    """
-    Implement greedy sequential OT distance computation.
-    
-    Args:
-        src_data: Source domain data
-        all_domain_indices: List of all available domain indices
-        data_source: Data source for extracting embeddings
-        domains: Domain array
-        embedding_type: Type of embedding to use
-        max_const, min_const: Cost constants
-        ot_config: OT configuration (OTConfig object)
-        k: Number of domains to select
-        force_recompute: Whether to force recomputation
-    
-    Returns:
-        tuple: (selected_domains, distances_at_each_step)
-    """
+def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_source, domains,
+                                    embedding_type, max_const, min_const, k,
+                                    source_domain_idx, lambda_param=None):
+    """Greedy sequential OT domain selection: pick the best next target domain at each step."""
     print(f"\n--- Greedy Sequential Selection for K={k} ---")
-    
-    # Load country mapping
-    country_mapping = load_country_mapping()
-    
+
+    country_mapping = load_country_mapping(args)
+
     selected_domains = []
     distances_at_each_step = []
     remaining_domains = [idx for idx in all_domain_indices if idx != source_domain_idx]
-    
+
     for step in range(k):
         rows = []
         print(f"\nStep {step + 1}: Selecting domain {step + 1}/{k}")
-        
-        best_distance = float('inf')
-        best_domain = None
 
-        if (step + 1) > 1:
-            include_greedy_sequential_str = True
-        else:
-            include_greedy_sequential_str = False
-        
-        # Try each remaining domain
+        best_distance, best_domain = float('inf'), None
+
         for candidate_domain in remaining_domains:
-            # Create target domain set: selected domains + candidate
             current_target_domains = selected_domains + [candidate_domain]
-            
             print(f"  Evaluating: {current_target_domains}")
-            
-            # Compute OT distance
+
             distance, from_cache = compute_or_load_distance(
-                src_data, current_target_domains, data_source, domains,
-                embedding_type, max_const, min_const, ot_config, source_domain_idx, force_recompute,
-                include_greedy_sequential_str=include_greedy_sequential_str, lambda_param=lambda_param
+                args, src_data, current_target_domains, data_source, domains,
+                embedding_type, max_const, min_const, source_domain_idx,
+                include_greedy_sequential_str=step > 0, lambda_param=lambda_param
             )
-            
-            status = "cached" if from_cache else "computed"
-            print(f"    Distance: {distance:.6f} ({status})")
+            print(f"    Distance: {distance:.6f} ({'cached' if from_cache else 'computed'})")
 
             torch.cuda.empty_cache()
             gc.collect()
-            
-            # Update best if this is better
+
             if distance < best_distance:
-                best_distance = distance
-                best_domain = candidate_domain
+                best_distance, best_domain = distance, candidate_domain
 
-            # Get country names
             source_domain_name = country_mapping.get(source_domain_idx, f"Unknown-{source_domain_idx}")
-            tgt_domain_names = [country_mapping.get(tgt_idx, f"Unknown-{tgt_idx}") for tgt_idx in current_target_domains]
-
-            row = {
+            rows.append({
                 "source_domain_idx": source_domain_idx,
                 "source_domain_name": source_domain_name,
                 "k": step + 1,
                 "tgt_domains": current_target_domains,
-                "tgt_domain_names": tgt_domain_names,
+                "tgt_domain_names": [country_mapping.get(i, f"Unknown-{i}") for i in current_target_domains],
                 "distance": distance,
-            }
-            rows.append(row)
+            })
 
-        os.makedirs(f"greedy_sequential_distances/{embedding_type}", exist_ok=True)
-        distance_df = pd.DataFrame(rows)
-        distance_df.to_csv(f"greedy_sequential_distances/{embedding_type}/k{step+1}_source{source_domain_idx}.csv", index=False)
-        
-        # Select the best domain
+        out_dir = Path(f"greedy_sequential_distances/{embedding_type}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(out_dir / f"k{step+1}_source{source_domain_idx}.csv", index=False)
+
         selected_domains.append(best_domain)
         remaining_domains.remove(best_domain)
         distances_at_each_step.append(best_distance)
-        
+
         print(f"  ✓ Selected domain {best_domain} with distance {best_distance:.6f}")
         print(f"  Selected so far: {selected_domains}")
-    
+
     print(f"\n→ Final selection: {selected_domains}")
     print(f"• Distances at each step: {[f'{d:.6f}' for d in distances_at_each_step]}")
 
     return selected_domains, distances_at_each_step
-
 
 def create_result_record(embedding_type, tgt_domain_indices, distance, source_domain_idx):
     """Create a result record with proper domain names"""
@@ -571,234 +337,145 @@ def create_result_record(embedding_type, tgt_domain_indices, distance, source_do
         "embedding_type": embedding_type,
         "src_domain_idx": source_domain_idx,
         "k": len(tgt_domain_indices),
-        "distance": distance
+        "distance": distance,
     }
-    
-    # Add individual target domains
     for i, idx in enumerate(tgt_domain_indices, 1):
         record[f"tgt_domain_{i}_idx"] = idx
-    
-    # Add combined identifier
     record["tgt_domains_combined"] = "+".join(str(idx) for idx in tgt_domain_indices)
-    
     return record
-
-# ==================== Main Computation ====================
 
 def parse_args():
     """Parse command-line arguments"""
-    # Default embedding types (will be overridden by config)
-    default_embedding_types = ["bert", "geoclip", "satclip_L10", "satclip_L40", "geodesic"]
-    default_combined_types = ["bert+geoclip", "bert+satclip_L10", "bert+satclip_L40", "bert+geodesic"]
-    all_embedding_types = default_embedding_types + default_combined_types
-    
     parser = argparse.ArgumentParser(description="Compute OT distances for GeoYFCC dataset")
-    parser.add_argument("--embedding-type", type=str, required=True,
-                       help="Embedding type to process (individual or combined)")
-    parser.add_argument("--source-domain-idx", type=int, default=57,
-                       help="Source domain index (default: 57)")
-    parser.add_argument("--config", type=str, default=None,
-                       help="Path to YAML configuration file")
-    parser.add_argument("--reg-e", type=float, default=None,
-                       help="Regularization parameter (default: from config)")
-    parser.add_argument("--max-iter", type=int, default=None,
-                       help="Maximum iterations (default: from config)")
-    parser.add_argument("--metric", type=str, default=None,
-                       help="Distance metric (default: from config)")
-    parser.add_argument("--method", type=str, default=None,
-                       help="OT method (default: from config)")
-    parser.add_argument("--normalize-cost", type=str, default=None,
-                       help="Cost normalization (default: from config)")
-    parser.add_argument("--k", type=int, default=None,
-                       help="Number of target domains K (default: from config)")
-    parser.add_argument("--greedy-sequential", action="store_true",
-                       help="Use greedy sequential domain selection instead of all combinations")
-    parser.add_argument("--force-recompute", action="store_true",
-                       help="Force recomputation even if cached results exist")
-    parser.add_argument("--lambda", type=float, default=None,
-                       dest="lambda_param",
-                       help="Lambda parameter for combined embeddings (default: 0.5)")
+    parser.add_argument("--data-root", type=str, default="./data", help="Root data directory")
+    parser.add_argument("--dataset-name", type=str, default="geoyfcc_text", help="Dataset folder name under the data root")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use (falls back to cpu if cuda is unavailable)")
+    parser.add_argument("--embedding-type", type=str, required=True, help="Embedding type to process, individual (e.g. 'bert') or combined (e.g. 'bert+geoclip')")
+    parser.add_argument("--source-domain-idx", type=int, default=57, help="Source domain index")
+    parser.add_argument("--total-domains", type=int, default=62, help="Total number of domains in the dataset")
+    parser.add_argument("--k", type=int, default=1, help="Number of target domains K")
+    parser.add_argument("--reg-e", type=float, default=0.01, help="Sinkhorn regularization parameter")
+    parser.add_argument("--max-iter", type=int, default=1000, help="Maximum solver iterations")
+    parser.add_argument("--metric", type=str, default="cosine", help="Distance metric for non-geodesic embeddings")
+    parser.add_argument("--method", type=str, default="sinkhorn", help="OT method: sinkhorn, sinkhorn_log, or emd")
+    parser.add_argument("--normalize-cost", type=str, default="max", help="Cost matrix normalization: none, max, minmax, or max_per_domain")
+    parser.add_argument("--normalize-after", action="store_true", help="Renormalize the combined cost matrix after weighting (combined embeddings only)")
+    parser.add_argument("--lambda", type=float, default=None, dest="lambda_param", help="Lambda weight for combined embeddings (default: 0.5)")
+    parser.add_argument("--greedy-sequential", action="store_true", help="Use greedy sequential domain selection instead of all combinations")
+    parser.add_argument("--force-recompute", action="store_true", help="Force recomputation even if cached results exist")
     return parser.parse_args()
 
 def main():
     args = parse_args()
+    initialize(args)
 
-    # Load configuration
-    global config, base_config, dataset_config
-    base_config = load_base_config()
-    dataset_config = load_dataset_config()
-    if args.config:
-        experiment_config = load_experiment_config(args.config)
-    else:
-        raise ValueError("--config is required (configs/ directory has been removed; pass an explicit config path)")
-
-    config = merge_configs(base_config, dataset_config, experiment_config)
-    
-    # Initialize from config
-    initialize_from_config(config)
-    
-    # Override config with command-line arguments
-    if args.reg_e is not None:
-        config['OT_CONFIG']['reg_e'] = args.reg_e
-    if args.max_iter is not None:
-        config['OT_CONFIG']['max_iter'] = args.max_iter
-    if args.normalize_cost is not None:
-        config['OT_CONFIG']['normalize_cost'] = args.normalize_cost
-    if args.method is not None:
-        config['OT_CONFIG']['method'] = args.method
-    if args.metric is not None:
-        config['OT_CONFIG']['metric'] = args.metric
-    if args.force_recompute:
-        config['OT_CONFIG']['force_recompute'] = True
-    if args.k is not None:
-        config['DOMAIN_SELECTION']['k'] = args.k
-    if args.greedy_sequential:
-        config['DOMAIN_SELECTION']['greedy_sequential'] = True
-    
-    # Get configuration values
-    ot_config = get_ot_config(config)
     source_domain_idx = args.source_domain_idx
     embedding_type = args.embedding_type
-    k = get_k_value(config)
-    force_recompute = should_force_recompute(config)
-    use_greedy_sequential = should_use_greedy_sequential(config)
+    k = args.k
+    use_greedy_sequential = args.greedy_sequential
     lambda_param = args.lambda_param
-    
-    # Get paths and constants
-    embedding_path_template = get_embedding_path_template(config)
-    result_dir = get_result_dir(config)
-    
+
+    result_dir = get_result_dir(args)
+
     print(f"\n{'='*60}")
     print(f"Processing {embedding_type} embeddings")
     print(f"Source Domain ID: {source_domain_idx}")
-    print(f"OT Config: {ot_config}")
-    print(f"Force Recompute: {force_recompute}")
+    print(f"OT Config: method={args.method}, reg_e={args.reg_e}, max_iter={args.max_iter}, "
+          f"metric={args.metric}, normalize_cost={args.normalize_cost}")
+    print(f"Force Recompute: {args.force_recompute}")
     print(f"K Value: {k}")
     print(f"Greedy Sequential: {use_greedy_sequential}")
     print(f"{'='*60}")
-    
-    # Get all domain indices
-    total_domains = config['DATASET']['total_domains']
-    all_domain_indices = list(range(total_domains))
 
-    metric_to_use = getattr(ot_config, 'metric_geodesic', 'geodesic') if embedding_type == "geodesic" else ot_config.metric
-    
-    # Create descriptive filename suffix from OT config
-    config_suffix = f"method_{ot_config.method}_reg_{ot_config.reg_e}_iter_{ot_config.max_iter}_metric_{metric_to_use}_norm_{ot_config.normalize_cost}"
-    
-    # Load data and constants based on embedding type
+    all_domain_indices = list(range(args.total_domains))
+
+    metric_to_use = "geodesic" if embedding_type == "geodesic" else args.metric
+    config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric_to_use}_norm_{args.normalize_cost}"
+
     if embedding_type == "geodesic":
-        # For geodesic distance, use coordinates instead of embeddings
         print("Using lat/lon coordinates for geodesic distance computation")
-        max_const, min_const = get_cost_constants(embedding_type)
+        max_const, min_const = get_cost_constants(embedding_type, args)
         print(f"Cost constants: min={min_const:.6f} km, max={max_const:.6f} km")
-        
-        # Extract source coordinates
+
         src_data = extract_domain_coordinates(dataset, domains, source_domain_idx)
         if len(src_data) == 0:
             print(f"✗ No valid coordinates found for source domain {source_domain_idx}")
             return
-        
-        data_source = dataset  # Pass dataset for coordinate extraction
+
+        data_source = dataset
     elif "+" in embedding_type:
-        embedding_types = embedding_type.split("+")
-        src_data_dict = {}
-        data_source_dict = {}
-        max_const_dict = {}
-        min_const_dict = {}
-        
-        for emb_type in embedding_types:
+        src_data, data_source, max_const, min_const = {}, {}, {}, {}
+
+        for emb_type in embedding_type.split("+"):
             if emb_type == "geodesic":
-                src_data_dict[emb_type] = extract_domain_coordinates(dataset, domains, source_domain_idx)
+                src_data[emb_type] = extract_domain_coordinates(dataset, domains, source_domain_idx)
             else:
-                embedding_path = Path(str(embedding_path_template).format(embedding_type=emb_type))
+                embedding_path = get_embedding_path(args, emb_type)
                 if not embedding_path.exists():
                     print(f"✗ Embedding file not found: {embedding_path}")
                     return
                 embeddings = torch.load(embedding_path, map_location="cuda")
-                data_source_dict[emb_type] = embeddings
-                src_data_dict[emb_type] = extract_domain_embeddings(embeddings, domains, source_domain_idx)
-                # Don't delete embeddings here as they're still needed in data_source_dict
-            max_const_dict[emb_type], min_const_dict[emb_type] = get_cost_constants(emb_type)
-        
-        src_data = src_data_dict
-        max_const = max_const_dict
-        min_const = min_const_dict
-        data_source = data_source_dict
+                data_source[emb_type] = embeddings
+                src_data[emb_type] = extract_domain_embeddings(embeddings, domains, source_domain_idx)
+            max_const[emb_type], min_const[emb_type] = get_cost_constants(emb_type, args)
     else:
-        # For other embedding types, use embeddings
-        embedding_path = Path(str(embedding_path_template).format(embedding_type=embedding_type))
+        embedding_path = get_embedding_path(args, embedding_type)
         if not embedding_path.exists():
             print(f"✗ Embedding file not found: {embedding_path}")
             return
-        
+
         embeddings = torch.load(embedding_path, map_location="cuda")
-        max_const, min_const = get_cost_constants(embedding_type)
-        
+        max_const, min_const = get_cost_constants(embedding_type, args)
         print(f"Cost constants: min={min_const:.6f}, max={max_const:.6f}")
-        
-        # Extract source embeddings
+
         src_data = extract_domain_embeddings(embeddings, domains, source_domain_idx)
-        data_source = embeddings  # Pass embeddings for embedding extraction
-    
-    # Process K target domains
+        data_source = embeddings
+
     print(f"\n--- K={k} target domains ---")
-    
+
     records = []
-    
+
     if use_greedy_sequential:
-        # Use greedy sequential selection
         print("Using greedy sequential domain selection")
         selected_domains, distances_at_each_step = greedy_sequential_ot_selection(
-            src_data, all_domain_indices, data_source, domains,
-            embedding_type, max_const, min_const, ot_config, k, source_domain_idx, force_recompute, lambda_param
+            args, src_data, all_domain_indices, data_source, domains,
+            embedding_type, max_const, min_const, k, source_domain_idx, lambda_param
         )
-        
-        # Create records for each step
-        for step, (domain, distance) in enumerate(zip(selected_domains, distances_at_each_step)):
-            # Create target domain set up to this step
-            step_domains = selected_domains[:step+1]
-            record = create_result_record(embedding_type, step_domains, distance, source_domain_idx)
+
+        for step, distance in enumerate(distances_at_each_step):
+            record = create_result_record(embedding_type, selected_domains[:step + 1], distance, source_domain_idx)
             record["selection_step"] = step + 1
             record["greedy_sequential"] = True
             records.append(record)
-            
+
         print(f"✓ Greedy sequential selection completed")
-        
     else:
-        # Use all combinations (original behavior)
         tgt_combinations = list(combinations(all_domain_indices, k))
         print(f"Computing {len(tgt_combinations)} combinations...")
-        
+
         for idx, tgt_domain_indices in enumerate(tgt_combinations, 1):
             distance, from_cache = compute_or_load_distance(
-                src_data, list(tgt_domain_indices), data_source, domains,
-                embedding_type, max_const, min_const, ot_config, source_domain_idx, force_recompute,
+                args, src_data, list(tgt_domain_indices), data_source, domains,
+                embedding_type, max_const, min_const, source_domain_idx,
                 lambda_param=lambda_param
             )
-            
-            status = "cached" if from_cache else "computed"
+
             if idx % 100 == 0 or idx == len(tgt_combinations):
+                status = "cached" if from_cache else "computed"
                 print(f"  [{idx}/{len(tgt_combinations)}] {tgt_domain_indices}: {distance:.6f} ({status})")
-            
+
             record = create_result_record(embedding_type, tgt_domain_indices, distance, source_domain_idx)
             record["greedy_sequential"] = False
             records.append(record)
-    
-    # Save results for this embedding type and K value
-    df = pd.DataFrame(records)
-    
-    # Create filename suffix based on method
+
     method_suffix = "greedy" if use_greedy_sequential else "all_combinations"
     output_path = result_dir / f"distances_source{source_domain_idx}_k{k}_{embedding_type}_{method_suffix}_{config_suffix}.csv"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False)
+    pd.DataFrame(records).to_csv(output_path, index=False)
     print(f"✓ Saved K={k} results to {output_path.name}")
-    
-    # Cleanup
+
     del src_data
     if embedding_type == "geodesic":
-        # Clear coordinate cache for geodesic computation
         clear_coordinate_cache()
     elif "+" in embedding_type:
         del data_source, max_const, min_const

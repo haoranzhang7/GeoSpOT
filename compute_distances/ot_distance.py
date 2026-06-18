@@ -1,8 +1,5 @@
 import torch
 import ot
-from typing import Optional, Tuple
-
-from .utils import combine_domain_embeddings
 
 
 def haversine_distance(src, tgt, radius=6371.0):
@@ -79,27 +76,27 @@ def uniform_weights(n, device):
     return torch.ones(n, device=device) / n
 
 
-def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> Tuple[float, float]:
+def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> float:
     cost_matrix = compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric)
     cost_matrix = normalize_cost_matrix(cost_matrix, ot_args)
-    
+
     a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
     b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
-    
+
     return solve_ot(a, b, cost_matrix, ot_args)
 
 
-def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_args1, cost_args2, ot_args) -> Tuple[float, float]:
+def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_args1, cost_args2, ot_args) -> float:
     cost_matrix_1 = compute_cost_matrix(src_emb1, tgt_emb1, cost_args1.metric)
-    cost_matrix_1 = normalize_cost_matrix(cost_matrix_1, cost_args1.normalize_cost, cost_args1.max_constant, cost_args1.min_constant)
+    cost_matrix_1 = normalize_cost_matrix(cost_matrix_1, cost_args1)
 
     cost_matrix_2 = compute_cost_matrix(src_emb2, tgt_emb2, cost_args2.metric)
-    cost_matrix_2 = normalize_cost_matrix(cost_matrix_2, cost_args2.normalize_cost, cost_args2.max_constant, cost_args2.min_constant)
+    cost_matrix_2 = normalize_cost_matrix(cost_matrix_2, cost_args2)
 
     combined = ot_args.lambda_param * cost_matrix_1 + (1 - ot_args.lambda_param) * cost_matrix_2
 
     if ot_args.normalize_after:
-        combined = normalize_cost_matrix(combined, 'max_per_domain', None, None)
+        combined = combined / torch.max(combined)
 
     a = uniform_weights(combined.shape[0], combined.device)
     b = uniform_weights(combined.shape[1], combined.device)
@@ -111,8 +108,8 @@ def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_ar
 
 def compute_ot_coupling(src_embeddings, tgt_embeddings, ot_args):
     cost_matrix = compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric)
-    cost_matrix = normalize_cost_matrix(cost_matrix, ot_args.normalize_cost, ot_args.max_constant, ot_args.min_constant)
-    
+    cost_matrix = normalize_cost_matrix(cost_matrix, ot_args)
+
     a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
     b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
     
@@ -130,8 +127,8 @@ def combine_domain_embeddings(embeddings_dict, domain_indices):
         
     return torch.cat([embeddings_dict[i] for i in domain_indices], dim=0)
 
-def compute_ot_distance_with_unions(embeddings_dict, src_domains, tgt_domains, ot_args) -> Tuple[float, float]:
+def compute_ot_distance_with_unions(embeddings_dict, src_domains, tgt_domains, ot_args) -> float:
     src = combine_domain_embeddings(embeddings_dict, src_domains)
     tgt = combine_domain_embeddings(embeddings_dict, tgt_domains)
-    
-    return compute_ot_distance(src, tgt, ot_args, ot_args.max_constant, ot_args.min_constant)
+
+    return compute_ot_distance(src, tgt, ot_args)

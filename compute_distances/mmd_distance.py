@@ -44,9 +44,9 @@ def median_heuristic_sigma(X, Y, max_samples=2000):
 
 def calculate_mmd(X, Y, kernel="multiscale", sigma=None, scales=(0.1, 0.5, 1.0, 2.0, 5.0)):
     """
-    kernel="multiscale": sum of Gaussian MMDs at sigma * scales (recommended).
-    kernel="gaussian":   single Gaussian; sigma defaults to median heuristic.
-    kernel="linear":     linear kernel.
+    kernel="multiscale": sum of Gaussian MMDs at sigma * scales
+    kernel="gaussian": single Gaussian; sigma defaults to median heuristic.
+    kernel="linear": linear kernel.
     """
     if not isinstance(X, torch.Tensor):
         X = torch.tensor(X, dtype=torch.float32)
