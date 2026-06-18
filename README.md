@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 ## 2. Data configuration
 
-By default, all configs assume your data lives under `./data` in the repo root.
+Pass `--data_dir`/`--data-root` (and `--dataset`/`--dataset-name`) to point at a different location. Run any script with `--help` to see its full flag list.
 
 ### Data Download
 
@@ -32,14 +32,6 @@ By default, all configs assume your data lives under `./data` in the repo root.
 ./data/geoyfcc/
 ```
 
-2. The main configs that reference this directory are:
-
-- `configs/experiments/pretrain_geoyfcc.yaml` (uses `DATA_DIR: ./data`)
-- `configs/experiments/zeroshot_geoyfcc.yaml` (uses `DATA_DIR: ./data`)
-- `configs/datasets/geoyfcc.yaml` (uses `PATHS.data_dir: ./data/geoyfcc`)
-
-If you prefer a different location, update those YAML entries accordingly.
-
 ---
 
 ## 3. Running core experiments
@@ -48,35 +40,39 @@ If you prefer a different location, update those YAML entries accordingly.
 
 ```bash
 python src/training/pretrain_by_domain.py \
-  --config configs/experiments/pretrain_geoyfcc.yaml \
   --pretrain_domain 5 \
-  --model_seed 48329
+  --model_seed 48329 \
+  --data_dir ./data
 ```
 
-- **Subset-selection pretraining**: Example configuration (for OT selection method, need to generate ot distances first)
+- **Subset-selection pretraining**: Example using OT-based domain selection (for the OT selection method, you need to generate OT distances first)
 
 ```bash
 python src/training/pretrain_by_domain_subset.py \
-  --config configs/experiments/subset_selection.yaml
+  --model_data_seed 48329 \
+  --num_domains 5 \
+  --domain_selection_method ot \
+  --tgt_domain 5 \
+  --ot_embedding_type bert \
+  --data_dir ./data
 ```
 
 - **Zero-shot evaluation**:
 
 ```bash
 python src/evaluation/zeroshot_test_eval.py \
-  --config configs/experiments/zeroshot_geoyfcc.yaml \
   --pretrain_domain 5 \
-  --target_domains 0 1 2 3 4
+  --target_domains 0 1 2 3 4 \
+  --data_dir ./data
 ```
 ---
 
 ## 4. Embeddings and OT distances
 
-- **GeoYFCC text embeddings (BERT)** (uses `configs/datasets/geoyfcc.yaml`; output dir can match `PATHS.embeddings_dir` there):
+- **GeoYFCC text embeddings (BERT)**:
 
 ```bash
 python src/data/embeddings/embeddings.py \
-  --config configs/datasets/geoyfcc.yaml \
   --output_dir ./data/geoyfcc/embeddings/ \
   --split train
 ```
