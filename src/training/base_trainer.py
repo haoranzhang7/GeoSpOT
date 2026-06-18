@@ -34,9 +34,6 @@ from src.core.utils import (
     load_checkpoint_if_exists, format_metrics_vision, format_metrics_text,
 )
 
-import yaml
-from src.core.config_utils import load_config
-
 
 class BasePretrainTrainer:
     """Base class for domain adaptation pretraining."""

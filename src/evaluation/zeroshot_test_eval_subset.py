@@ -45,8 +45,6 @@ from src.core.utils import (
     format_metrics_vision, format_metrics_text
 )
 
-import yaml
-from src.core.config_utils import load_config
 
 
 def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_size, 
@@ -269,9 +267,9 @@ def save_results(results_all_seed, results_all_seed_with_preds, target_domain_id
     logger.info(f"Finish saving pickle to {pkl_filepath}")
 
 
-def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
+def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
     """Main evaluation function for subset models."""
-    
+
     task_name = "zeroshot_eval_subset"
     task_directory_name = "2_zeroshot_eval_subset"
     training_task_name = "pretrain"
@@ -280,9 +278,9 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
     # Setup device (single-GPU: cuda:0 if available)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    dataset_name = config["DATASET_NAME"]
-    spatial_split_types = config["DOMAIN_TYPE"]
-    model_name = config["MODEL_NAME"]
+    dataset_name = args.dataset
+    spatial_split_types = args.domain_type
+    model_name = args.model
 
     # Setup directories with subset-specific naming
     subset_suffix = ""
@@ -292,11 +290,11 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
         subset_suffix += f"_K{subset_params['num_domains']}_{subset_params['domain_selection_method']}"
     if subset_params.get('ot_norm'):
         norm_type = f"{subset_params['ot_norm']}"
-    
-    CHECKPOINT_DIR = os.path.join(config["CHECKPOINT_ROOT"], f"{training_task_directory_name}{subset_suffix}", model_name, norm_type)
-    LOG_DIR = os.path.join(config["LOG_ROOT"], task_directory_name, model_name)
-    
-    RESULTS_DIR = os.path.join(config.get("RESULTS_ROOT", "1_training_results/test_results"), task_directory_name, model_name)
+
+    CHECKPOINT_DIR = os.path.join(args.checkpoint_root, f"{training_task_directory_name}{subset_suffix}", model_name, norm_type)
+    LOG_DIR = os.path.join(args.log_root, task_directory_name, model_name)
+
+    RESULTS_DIR = os.path.join(args.results_root, task_directory_name, model_name)
     CSV_DIR = os.path.join(RESULTS_DIR, "csv")
     JSON_DIR = os.path.join(RESULTS_DIR, "json")
     PKL_DIR = os.path.join(RESULTS_DIR, "pickle")
@@ -304,7 +302,7 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
     setup_directories([LOG_DIR, RESULTS_DIR, CSV_DIR, JSON_DIR, PKL_DIR])
 
     summary_csv_path = resolve_summary_csv_path(
-        config=config,
+        config={},
         summary_csv_arg=summary_csv_override,
         results_dir=RESULTS_DIR,
         spatial_split_types=spatial_split_types,
@@ -323,9 +321,10 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
     # Load dataset
     print("Loading Dataset...")
     logger.info("Loading Dataset...")
-    dataset = load_dataset(dataset_name, root_dir=config["DATA_DIR"])
+    dataset = load_dataset(dataset_name, root_dir=args.data_dir)
 
-    eval_batch_size = config["EVAL_BATCH_SIZE"]
+    eval_batch_size = args.eval_batch_size
+    model_data_seeds = args.seeds
 
     # If tgt_domain is specified in subset_params, only evaluate on that domain
     # Otherwise, evaluate on all target_domain_idxs
@@ -359,7 +358,7 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
                 existing_seeds = set(existing_df['model_data_seed'].tolist())
                 print(f"Found existing CSV with seeds: {existing_seeds}")
                 logger.info(f"Found existing CSV with seeds: {existing_seeds}")
-                if len(existing_seeds) == len(config["MODEL_DATA_SEEDS"]):
+                if len(existing_seeds) == len(model_data_seeds):
                     print(f"All seeds already exist in CSV")
                     logger.info(f"All seeds already exist in CSV")
                     continue
@@ -390,8 +389,6 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
 
         target_domain_label = get_target_domain_name(dataset, dataset_name, target_domain_idx)
 
-        model_data_seeds = config["MODEL_DATA_SEEDS"]
-        
         for model_data_seed in model_data_seeds:
             # Setup random seeds
             g = setup_seeds(model_data_seed)
@@ -516,9 +513,17 @@ def main(config, target_domain_idxs, subset_params, summary_csv_override=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--target_domains', type=int, nargs="+", required=True, help='Domains to test model')
-    parser.add_argument('--config', type=str, default="config.yaml", help="Path to config file")
+    parser.add_argument('--dataset', default='geoyfcc_text')
+    parser.add_argument('--domain_type', default='countries')
+    parser.add_argument('--data_dir', default='./data')
+    parser.add_argument('--checkpoint_root', default='./results/subset/checkpoints')
+    parser.add_argument('--log_root', default='./results/subset/logs')
+    parser.add_argument('--results_root', default='./results/subset/test_results')
+    parser.add_argument('--model', default='bert_singlelabel')
+    parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
     parser.add_argument('--summary_csv', type=str, help='Optional path to summary CSV file')
-    
+
     # Subset model evaluation parameters
     parser.add_argument('--subset_size', type=int, help='Subset size B used for training')
     parser.add_argument('--num_domains', type=int, help='Number of domains K used for training')
@@ -531,11 +536,9 @@ if __name__ == '__main__':
     parser.add_argument('--ot_norm', type=str, help='OT normalization (if OT method used)')
     parser.add_argument('--val_subset_size', type=int, help='Validation subset size V used for training')
     parser.add_argument('--tgt_domain', type=int, help='Target domain used for training')
-    
+
     args = parser.parse_args()
 
-    config = load_config(args.config)
-    
     # Create subset parameters dictionary
     subset_params = {
         'subset_size': args.subset_size,
@@ -550,5 +553,5 @@ if __name__ == '__main__':
         'val_subset_size': args.val_subset_size,
         'tgt_domain': args.tgt_domain
     }
-    
-    main(config, args.target_domains, subset_params, summary_csv_override=args.summary_csv)
+
+    main(args, args.target_domains, subset_params, summary_csv_override=args.summary_csv)

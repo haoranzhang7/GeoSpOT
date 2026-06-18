@@ -25,7 +25,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
 
 # Local imports
 from src.training.base_trainer import BasePretrainTrainer
-from src.core.config_utils import load_config
 from src.data.load_datasets import (
     get_domain_split_mask, get_domain_dataloader, seed_worker, get_finetune_train_mask
 )
@@ -279,75 +278,78 @@ class FewshotTransferTrainer(BasePretrainTrainer):
         return False
 
 
-def main(config, pretrain_domain_idx, target_domain_idx, finetune_size, model_seed, 
-         finetune_data_seed, finetune_mode='all', budget=None, train_val_ratio=0.5):
+def main(args):
     """Main training function."""
-    assert pretrain_domain_idx != target_domain_idx, \
+    assert args.pretrain_domain != args.finetune_domain, \
         "WARNING: Attempt to finetune on the same domain where model is pretrained on"
-    
-    trainer = FewshotTransferTrainer(
-        config,
-        pretrain_domain_idx=pretrain_domain_idx,
-        target_domain_idx=target_domain_idx,
-        finetune_size=finetune_size,
-        model_seed=model_seed,
-        finetune_data_seed=finetune_data_seed,
-        finetune_mode=finetune_mode,
-        budget=budget,
-        train_val_ratio=train_val_ratio,
-    )
-    # Skip if already completed
-    if trainer._is_training_completed():
-        print("⏭️  Skipping few-shot transfer - already completed")
-        return
-    trainer.train()
+
+    model_entry = {
+        'LEARNING_RATE': args.lr, 'DEFAULT_LEARNING_RATE': args.lr,
+        'NUM_EPOCHS': args.num_epochs,
+        'OPTIMIZER': args.optimizer, 'DEFAULT_OPTIMIZER': args.optimizer,
+        'WEIGHT_DECAY': args.weight_decay, 'DEFAULT_WEIGHT_DECAY': args.weight_decay,
+        'SCHEDULER': args.scheduler,
+    }
+    config = {
+        'DATASET_NAME': args.dataset,
+        'DOMAIN_TYPE': args.domain_type,
+        'MODEL_NAME': args.model,
+        'DATA_DIR': args.data_dir,
+        'CHECKPOINT_ROOT': args.checkpoint_root,
+        'LOG_ROOT': args.log_root,
+        'TRAIN_BATCH_SIZE': args.train_batch_size,
+        'EVAL_BATCH_SIZE': args.eval_batch_size,
+        'PATIENCE': args.patience,
+        'START_FROM_EPOCH': args.start_from_epoch,
+        'MODELS': {args.model: model_entry, args.model.upper(): model_entry},
+    }
+
+    for model_seed in args.seeds:
+        trainer = FewshotTransferTrainer(
+            config,
+            pretrain_domain_idx=args.pretrain_domain,
+            target_domain_idx=args.finetune_domain,
+            finetune_size=args.finetune_size,
+            model_seed=model_seed,
+            finetune_data_seed=model_seed,
+            finetune_mode=args.finetune_mode,
+            budget=args.budget,
+            train_val_ratio=args.train_val_ratio,
+        )
+        if trainer._is_training_completed():
+            print("⏭️  Skipping few-shot transfer - already completed")
+            continue
+        trainer.train()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Few-shot transfer training')
-    parser.add_argument('-d', '--pretrain_domain', type=int, required=True, 
+    parser.add_argument('-d', '--pretrain_domain', type=int, required=True,
                        help='Domain used in pretraining')
-    parser.add_argument('-f', '--finetune_domain', type=int, required=True, 
+    parser.add_argument('-f', '--finetune_domain', type=int, required=True,
                        help='Target domain for finetuning')
-    parser.add_argument('-n', '--finetune_size', type=int, required=True, 
+    parser.add_argument('-n', '--finetune_size', type=int, required=True,
                        help='n samples per class for finetune')
-    parser.add_argument('--config', type=str, default='config.yaml', 
-                       help='Path to config file')
-    parser.add_argument('--finetune_mode', type=str, choices=['all', 'last'], 
+    parser.add_argument('--dataset', default='geoyfcc_text')
+    parser.add_argument('--domain_type', default='countries')
+    parser.add_argument('--data_dir', default='./data')
+    parser.add_argument('--checkpoint_root', default='./results/fewshot/checkpoints')
+    parser.add_argument('--log_root', default='./results/fewshot/logs')
+    parser.add_argument('--model', default='bert_singlelabel')
+    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--num_epochs', type=int, default=10)
+    parser.add_argument('--optimizer', default='AdamW')
+    parser.add_argument('--weight_decay', type=float, default=0.01)
+    parser.add_argument('--scheduler', default='cosine')
+    parser.add_argument('--train_batch_size', type=int, default=64)
+    parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--patience', type=int, default=3)
+    parser.add_argument('--start_from_epoch', type=int, default=0)
+    parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
+    parser.add_argument('--finetune_mode', type=str, choices=['all', 'last'],
                        default='all', help='Finetune entire model or only last layer')
-    parser.add_argument('--budget', type=int, default=None, 
+    parser.add_argument('--budget', type=int, default=None,
                        help='Optional global budget after per-class sampling')
     parser.add_argument('--train_val_ratio', type=float, default=0.5,
                        help='Validation set size as ratio of train set size (default: 0.5, meaning val is half of train)')
-    args = parser.parse_args()
-    
-    # Handle relative config paths
-    if not os.path.isabs(args.config):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
-        config_path = os.path.abspath(os.path.join(project_root, 'SatOT', args.config))
-    else:
-        config_path = args.config
-    
-    CONFIG = load_config(config_path)
-    
-    # Set defaults if not present
-    CONFIG.setdefault("CHECKPOINT_ROOT", os.path.join("1_training_results", "checkpoints"))
-    CONFIG.setdefault("LOG_ROOT", os.path.join("1_training_results", "logs"))
-    
-    # Get seeds from config (one-to-one: use the same seed for pretrain and finetune)
-    model_seeds = CONFIG.get("MODEL_SEEDS", [48329])
-    
-    # Run training using identical seed for model and finetune data
-    for model_seed in model_seeds:
-        main(
-            CONFIG, 
-            args.pretrain_domain, 
-            args.finetune_domain, 
-            args.finetune_size, 
-            model_seed, 
-            model_seed,  # finetune_data_seed equals model_seed
-            finetune_mode=args.finetune_mode, 
-            budget=args.budget,
-            train_val_ratio=args.train_val_ratio
-        )
+    main(parser.parse_args())

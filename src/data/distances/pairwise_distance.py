@@ -6,33 +6,25 @@ Script to process embeddings and compute pairwise distances for multiple models.
 import sys
 import os
 import argparse
-import yaml
 
 sys.path.append(os.path.join(os.getcwd(), '../..'))
 
 from compute_distances.core.utils import compute_pairwise_distances
 
-def load_config(path="configs/experiments/pretrain_geoyfcc.yaml"):
-    """Load configuration from YAML file."""
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract embeddings from pretrained models")
-    parser.add_argument('--config', type=str, default="configs/experiments/pretrain_geoyfcc.yaml", help="Path to config file")
+    parser = argparse.ArgumentParser(description="Compute pairwise distances from embeddings")
+    parser.add_argument('--embedding_dir', type=str, default='./data/embeddings', help="Directory containing embeddings")
+    parser.add_argument('--result_dir', type=str, default='./data/distances', help="Directory to save distance results")
     parser.add_argument('--model_type', type=str, default="bert", help="Model type")
 
     args = parser.parse_args()
-    
 
-    config = load_config(args.config)
-
-    # Configuration
-    data_dir = config["EMBEDDING_DIR"]
-    result_dir = config["RESULT_DIR"]
+    data_dir = args.embedding_dir
+    result_dir = args.result_dir
     dataset_name = 'geoyfcc_text'
     devices = ['cuda:0']  # Adjust based on available GPUs
-    
+
     model_type = args.model_type
 
     if model_type == "bert":
@@ -40,7 +32,7 @@ def main():
     else:
         full_model = model_type
     embedding_path = f'{data_dir}/{dataset_name}/{model_type}/{dataset_name}_train_{full_model}.npz'
-    
+
     if os.path.exists(embedding_path):
         print(f"Processing {model_type}...")
         compute_pairwise_distances(

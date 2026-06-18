@@ -44,8 +44,6 @@ from src.core.utils import (
     format_metrics_vision, format_metrics_text
 )
 
-import yaml
-from src.core.config_utils import load_config
 
 
 def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_size, 
@@ -165,27 +163,26 @@ def save_results(results_all_seed, results_all_seed_with_preds, pretrain_domain_
     logger.info(f"Finish saving pickle to {pkl_filepath}")
 
 
-def main(config, pretrain_domain_idx, target_domain_idxs):
+def main(args, pretrain_domain_idx, target_domain_idxs):
     """Main evaluation function."""
-    n_val = config["N_VAL"]
-    n_val = n_val[0]
-    
+    n_val = args.n_val[0]
+
     task_name = "fewshot_eval"
     task_directory_name = "3_fewshot_eval"
     training_task_name = f"{n_val}shot_transfer"
     training_task_directory_name = f"3_{n_val}shot_transfer"
-    model_type = f"ft{n_val}shot"
+    model_type = args.model_type
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    dataset_name = config["DATASET_NAME"]
-    spatial_split_types = config["DOMAIN_TYPE"]
-    model_name = config["MODEL_NAME"]
+    dataset_name = args.dataset
+    spatial_split_types = args.domain_type
+    model_name = args.model
 
-    CHECKPOINT_DIR = os.path.join(config["CHECKPOINT_ROOT"], training_task_directory_name, model_name, model_type)
-    LOG_DIR = os.path.join(config["LOG_ROOT"], task_directory_name, model_name)
-    
-    RESULTS_DIR = os.path.join(config.get("RESULTS_ROOT", "training_results/test_results"), task_directory_name, model_name)
+    CHECKPOINT_DIR = os.path.join(args.checkpoint_root, training_task_directory_name, model_name, model_type)
+    LOG_DIR = os.path.join(args.log_root, task_directory_name, model_name)
+
+    RESULTS_DIR = os.path.join(args.results_root, task_directory_name, model_name)
     CSV_DIR = os.path.join(RESULTS_DIR, "csv")
     JSON_DIR = os.path.join(RESULTS_DIR, "json")
     PKL_DIR = os.path.join(RESULTS_DIR, "pickle")
@@ -204,9 +201,10 @@ def main(config, pretrain_domain_idx, target_domain_idxs):
     # Load dataset
     print("Loading Dataset...")
     logger.info("Loading Dataset...")
-    dataset = load_dataset(dataset_name, root_dir=config["DATA_DIR"])
+    dataset = load_dataset(dataset_name, root_dir=args.data_dir)
 
-    eval_batch_size = config["EVAL_BATCH_SIZE"]
+    eval_batch_size = args.eval_batch_size
+    model_seeds = args.seeds
 
     for target_domain_idx in target_domain_idxs:
         if target_domain_idx == pretrain_domain_idx:
@@ -224,7 +222,7 @@ def main(config, pretrain_domain_idx, target_domain_idxs):
                 existing_seeds = set(existing_df['model_seed'].tolist())
                 print(f"Found existing CSV with seeds: {existing_seeds}")
                 logger.info(f"Found existing CSV with seeds: {existing_seeds}")
-                if len(existing_seeds) == len(config["MODEL_SEEDS"]):
+                if len(existing_seeds) == len(model_seeds):
                     print(f"All seeds already exist in CSV")
                     logger.info(f"All seeds already exist in CSV")
                     continue
@@ -253,9 +251,6 @@ def main(config, pretrain_domain_idx, target_domain_idxs):
         print(f"Start Evaluation on domain {target_domain_idx}")
         logger.info(f"Start Evaluation on domain {target_domain_idx}")
 
-        model_seeds = config["MODEL_SEEDS"]
-        model_type = config["MODEL_TYPE"]
-        
         for model_seed in model_seeds:
             data_seed = model_seed
             # Setup random seeds
@@ -339,15 +334,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--pretrain_domain', type=int, required=True, help='Domain to pretrain model')
     parser.add_argument('-t', '--target_domains', type=int, nargs="+", required=True, help='Domain to test model')
-    parser.add_argument('--config', type=str, default="config.yaml", help="Path to config file")
+    parser.add_argument('--dataset', default='geoyfcc_text')
+    parser.add_argument('--domain_type', default='countries')
+    parser.add_argument('--data_dir', default='./data')
+    parser.add_argument('--checkpoint_root', default='./results/fewshot/checkpoints')
+    parser.add_argument('--log_root', default='./results/fewshot/logs')
+    parser.add_argument('--results_root', default='./results/fewshot/test_results')
+    parser.add_argument('--model', default='bert_singlelabel')
+    parser.add_argument('--model_type', default='ft1shot')
+    parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
+    parser.add_argument('--n_val', type=int, nargs="+", default=[1])
     args = parser.parse_args()
 
-    # Handle relative config paths
-    config_path = args.config
-    if not os.path.isabs(config_path):
-        # If not absolute, assume it's relative to project root (one level up from src_dir)
-        project_root = os.path.dirname(src_dir)
-        config_path = os.path.abspath(os.path.join(project_root, 'SatOT', config_path))
-    config = load_config(config_path)
-    
-    main(config, args.pretrain_domain, args.target_domains)
+    main(args, args.pretrain_domain, args.target_domains)

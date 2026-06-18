@@ -4,23 +4,10 @@ import pickle
 from pathlib import Path
 from typing import List, Tuple, Union, Optional
 
-import sys
-import os
+from geoclip import LocationEncoder
 
-try:
-    from geoclip import LocationEncoder
-    GEOCLIP_AVAILABLE = True
-except ImportError:
-    GEOCLIP_AVAILABLE = False
-    LocationEncoder = None
-
-try:
-    from huggingface_hub import hf_hub_download
-    from satclip.load import get_satclip
-    SATCLIP_AVAILABLE = True
-except ImportError:
-    SATCLIP_AVAILABLE = False
-    print("Warning: SatCLIP not available. SatCLIP embeddings will be disabled.")
+from huggingface_hub import hf_hub_download
+from .satclip.load import get_satclip
 
 SUPPORTED_EMBEDDING_TYPES = ["geoclip", "satclip_l10", "satclip_l40"]
 
@@ -35,9 +22,6 @@ def generate_geoclip_embeddings(lat_lon_list: List[Tuple[float, float]]) -> torc
     Returns:
         torch.Tensor: Embeddings with shape (n_locations, embedding_dim)
     """
-    if not GEOCLIP_AVAILABLE:
-        raise ImportError("GeoClip is not available. Please install it: pip install geoclip")
-    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     encoder = LocationEncoder().to(device)
@@ -63,8 +47,6 @@ def generate_satclip_embeddings(lat_lon_list: List[Tuple[float, float]], satclip
     Returns:
         torch.Tensor: Embeddings with shape (n_locations, embedding_dim)
     """
-    if not SATCLIP_AVAILABLE:
-        raise ImportError("SatClip is not available. Please install it.")
     
     if satclip_type == 'l10':
         encoder = get_satclip(
@@ -164,17 +146,3 @@ def generate_and_save_embeddings(lat_lon_list: List[Tuple[float, float]],
     print(f"Shape: {embeddings.shape}")
     
     return embeddings
-
-def get_available_embedding_types() -> List[str]:
-    """
-    Get a list of available embedding types based on installed packages.
-    
-    Returns:
-        List[str]: List of available embedding types
-    """
-    available = []
-    if GEOCLIP_AVAILABLE:
-        available.append("geoclip")
-    if SATCLIP_AVAILABLE:
-        available.append("satclip")
-    return available

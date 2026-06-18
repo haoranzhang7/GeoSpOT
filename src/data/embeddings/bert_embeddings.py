@@ -1,10 +1,15 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "datasets"))
+
 import torch
 from torch.utils.data import DataLoader
 from transformers import BertModel, BertTokenizer
 from tqdm import tqdm
 from typing import List
 
-from geoyfcc import GeoYFCCText 
+from geoyfcc import GeoYFCCText
 
 
 def collate_fn(batch, tokenizer):
@@ -65,10 +70,11 @@ def generate_bert_embeddings(
 
 
 if __name__ == "__main__":
-    dataset = GeoYFCCText(root="../../../data/geoyfcc")
+    _repo_root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    _data_dir = os.path.join(_repo_root, "data", "geoyfcc")
+    dataset = GeoYFCCText(root=_data_dir)
     print(f"[INFO] Dataset loaded with {len(dataset)} samples")
 
     embeddings = generate_bert_embeddings(dataset, batch_size=64)
-    # Save embeddings to disk
-    torch.save(embeddings, "../../../data/geoyfcc/geoyfcc_bert_embeddings.pt")
+    torch.save(embeddings, os.path.join(_data_dir, "geoyfcc_bert_embeddings.pt"))
     print("[INFO] Embeddings saved to geoyfcc_bert_embeddings.pt")

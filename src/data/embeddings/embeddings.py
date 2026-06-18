@@ -34,20 +34,6 @@ from src.core.utils import setup_seeds, setup_directories
 
 from location_embeddings.utils import generate_geoclip_embeddings, generate_satclip_embeddings
 
-import yaml
-
-def load_config(path="configs/datasets/geoyfcc.yaml"):
-    with open(path, "r") as f:
-        cfg = yaml.safe_load(f)
-    if cfg is None:
-        cfg = {}
-    # Derive ROOT_DIR for load_dataset: parent of dataset dir (e.g. ./data from ./data/geoyfcc)
-    if "ROOT_DIR" not in cfg:
-        paths = cfg.get("PATHS") or {}
-        data_dir = paths.get("data_dir", "./data/geoyfcc")
-        cfg["ROOT_DIR"] = os.path.dirname(data_dir) or "./data"
-    return cfg
-
 def setup_dataloaders(dataset_name, dataset, batch_size, split, model_seed, tokenizer_type=None):
     mask = get_split_mask(dataset_name, dataset, split=split)
     generator = setup_seeds(model_seed)
@@ -181,9 +167,9 @@ def extract_geoclip_embeddings(
     indices = np.where(mask)[0]
 
     data_root = cfg.get("ROOT_DIR", "./data")
-    cache_dir = os.path.join(data_root, "geoyfcc")
-    coords_path = os.path.join(cache_dir, "coordinates.npy")
-    labels_path = os.path.join(cache_dir, "labels.npy")
+    cache_dir = os.path.join(data_root, dataset_name)
+    coords_path = os.path.join(cache_dir, f"coordinates_{split}.npy")
+    labels_path = os.path.join(cache_dir, f"labels_{split}.npy")
 
     if os.path.exists(coords_path) and os.path.exists(labels_path):
         print(f"Loading cached coordinates and labels from {coords_path} and {labels_path}...")
@@ -212,7 +198,7 @@ def extract_geoclip_embeddings(
     for i in tqdm(range(0, len(coords), batch_size), desc="Extracting location embeddings"):
         batch_coords = coords[i:i+batch_size]
         batch_embeddings = generate_geoclip_embeddings(batch_coords)
-        all_embeddings.append(batch_embeddings.detach().numpy())
+        all_embeddings.append(batch_embeddings.detach().cpu().numpy())
     embeddings = np.concatenate(all_embeddings, axis=0)
     
     coords_array = np.array(coords, dtype=np.float32)
@@ -254,9 +240,9 @@ def extract_satclip_embeddings(
     indices = np.where(mask)[0]
 
     data_root = cfg.get("ROOT_DIR", "./data")
-    cache_dir = os.path.join(data_root, "geoyfcc")
-    coords_path = os.path.join(cache_dir, "coordinates.npy")
-    labels_path = os.path.join(cache_dir, "labels.npy")
+    cache_dir = os.path.join(data_root, dataset_name)
+    coords_path = os.path.join(cache_dir, f"coordinates_{split}.npy")
+    labels_path = os.path.join(cache_dir, f"labels_{split}.npy")
 
     if os.path.exists(coords_path) and os.path.exists(labels_path):
         print(f"Loading cached coordinates and labels from {coords_path} and {labels_path}...")
@@ -282,7 +268,6 @@ def extract_satclip_embeddings(
     domain_labels = get_domain_labels(dataset_name, dataset, indices)
     print(f"Extracting SatCLIP embeddings ({split})...")
     all_embeddings = []
-    device = torch.device('cuda:0')
     for i in tqdm(range(0, len(coords), batch_size), desc="Extracting location embeddings"):
         batch_coords = torch.tensor(coords[i:i+batch_size], dtype=torch.float32, device=device)
         batch_embeddings = generate_satclip_embeddings(batch_coords, satclip_type=satclip_type, device=device)
@@ -308,7 +293,7 @@ def extract_satclip_embeddings(
 
 def main():
     parser = argparse.ArgumentParser(description="Extract embeddings for GeoYFCC (BERT, GeoCLIP, SatCLIP)")
-    parser.add_argument("--config", type=str, default="configs/datasets/geoyfcc.yaml", help="Path to config file (e.g. configs/datasets/geoyfcc.yaml)")
+    parser.add_argument("--data_root", type=str, default="./data", help="Root directory for data")
     parser.add_argument("--dataset", type=str, default="geoyfcc_text", choices=["geoyfcc_text"], help="Dataset (only geoyfcc_text supported)")
     parser.add_argument("--domain", type=str, default="all", help="Domain index or 'all' (kept for CLI compatibility)")
     parser.add_argument("--split", type=str, default="train", choices=["train", "val", "test"], help="Data split")
@@ -323,7 +308,7 @@ def main():
     parser.add_argument("--model_seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = {"ROOT_DIR": args.data_root}
     if args.device:
         device = torch.device(args.device)
     else:

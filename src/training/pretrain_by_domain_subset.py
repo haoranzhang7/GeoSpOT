@@ -17,7 +17,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.abspath(os.path.join(script_dir, '..', '..'))
 sys.path.insert(0, src_dir)
 
-from base_trainer import BasePretrainTrainer, load_config
+from base_trainer import BasePretrainTrainer
 from src.data.load_datasets import get_domain_split_mask, get_domain_dataloader, seed_worker
 from src.core.subset_selection import choose_candidate_domains, uniformly_sample_across_domains
 from src.core.utils import setup_logging, setup_directories, get_criterion, EarlyStopping, load_checkpoint_if_exists
@@ -242,109 +242,62 @@ class PretrainSubsetTrainer(BasePretrainTrainer):
         return train_dataloader, val_dataloader
 
 
-def _get_subset_defaults_from_config(config):
-    """Read subset and OT defaults from config so CLI can omit them."""
-    defaults = {}
-    # Model/data seed
-    if config.get("MODEL_DATA_SEEDS"):
-        defaults["model_data_seed"] = config["MODEL_DATA_SEEDS"][0]
-    elif config.get("MODEL_SEEDS"):
-        defaults["model_data_seed"] = config["MODEL_SEEDS"][0]
-    # Subset size / num_domains / method
-    if config.get("BUDGET_VALUES"):
-        defaults["subset_size"] = config["BUDGET_VALUES"][0]
-    if config.get("K_VALUES"):
-        defaults["num_domains"] = config["K_VALUES"][0]
-    if config.get("DOMAIN_METHODS"):
-        defaults["domain_selection_method"] = config["DOMAIN_METHODS"][0]
-    if config.get("VAL_SIZE_MAPPING") and defaults.get("subset_size") is not None:
-        defaults["val_subset_size"] = config["VAL_SIZE_MAPPING"].get(defaults["subset_size"])
-    # OT: target domain and embedding type
-    if config.get("TARGET_DOMAINS"):
-        defaults["tgt_domain"] = config["TARGET_DOMAINS"][0]
-    elif "TGT_DOMAIN" in config:
-        defaults["tgt_domain"] = config["TGT_DOMAIN"]
-    if config.get("OT_EMBEDDING_TYPE"):
-        defaults["ot_embedding_type"] = config["OT_EMBEDDING_TYPE"]
-    elif config.get("OT_EMBEDDING_TYPES"):
-        defaults["ot_embedding_type"] = config["OT_EMBEDDING_TYPES"][0]
-    # OT params (YAML uses OT_REG_E, OT_MAX_ITER, OT_NORMALIZE_COST)
-    if "OT_METHOD" in config:
-        defaults["ot_method"] = config["OT_METHOD"]
-    if "OT_REG_E" in config:
-        defaults["ot_reg"] = str(config["OT_REG_E"])
-    if "OT_MAX_ITER" in config:
-        defaults["ot_iter"] = str(config["OT_MAX_ITER"])
-    if "OT_METRIC" in config:
-        defaults["ot_metric"] = config["OT_METRIC"]
-    if "OT_NORMALIZE_COST" in config:
-        defaults["ot_norm"] = config["OT_NORMALIZE_COST"]
-    return defaults
-
-
-def main(config, model_data_seed, subset_size=None, val_subset_size=None, num_domains=None, domain_selection_method='random', exclude_domains=None,
-         tgt_domain=None, ot_embedding_type=None, ot_method=None, ot_reg=None, ot_iter=None, ot_metric=None, ot_norm=None):
+def main(args):
     """Main training function with subset selection."""
-    # Fill from config when not provided
-    cfg_defaults = _get_subset_defaults_from_config(config)
-    if model_data_seed is None and cfg_defaults.get("model_data_seed") is not None:
-        model_data_seed = cfg_defaults["model_data_seed"]
-    if model_data_seed is None:
-        raise ValueError("model_data_seed is required: provide -s/--model_data_seed or set MODEL_DATA_SEEDS/MODEL_SEEDS in config")
-    if subset_size is None and cfg_defaults.get("subset_size") is not None:
-        subset_size = cfg_defaults["subset_size"]
-    if val_subset_size is None and cfg_defaults.get("val_subset_size") is not None:
-        val_subset_size = cfg_defaults["val_subset_size"]
-    if num_domains is None and cfg_defaults.get("num_domains") is not None:
-        num_domains = cfg_defaults["num_domains"]
-    if domain_selection_method == 'random' and cfg_defaults.get("domain_selection_method") is not None:
-        domain_selection_method = cfg_defaults["domain_selection_method"]
-    if domain_selection_method == 'ot':
-        if tgt_domain is None and cfg_defaults.get("tgt_domain") is not None:
-            tgt_domain = cfg_defaults["tgt_domain"]
-        if ot_embedding_type is None and cfg_defaults.get("ot_embedding_type") is not None:
-            ot_embedding_type = cfg_defaults["ot_embedding_type"]
-        if ot_method is None and cfg_defaults.get("ot_method") is not None:
-            ot_method = cfg_defaults["ot_method"]
-        if ot_reg is None and cfg_defaults.get("ot_reg") is not None:
-            ot_reg = cfg_defaults["ot_reg"]
-        if ot_iter is None and cfg_defaults.get("ot_iter") is not None:
-            ot_iter = cfg_defaults["ot_iter"]
-        if ot_metric is None and cfg_defaults.get("ot_metric") is not None:
-            ot_metric = cfg_defaults["ot_metric"]
-        if ot_norm is None and cfg_defaults.get("ot_norm") is not None:
-            ot_norm = cfg_defaults["ot_norm"]
+    if args.model_data_seed is None:
+        raise ValueError("model_data_seed is required: provide -s/--model_data_seed")
+
+    model_entry = {
+        'LEARNING_RATE': args.lr, 'DEFAULT_LEARNING_RATE': args.lr,
+        'NUM_EPOCHS': args.num_epochs,
+        'OPTIMIZER': args.optimizer, 'DEFAULT_OPTIMIZER': args.optimizer,
+        'WEIGHT_DECAY': args.weight_decay, 'DEFAULT_WEIGHT_DECAY': args.weight_decay,
+        'SCHEDULER': args.scheduler,
+    }
+    config = {
+        'DATASET_NAME': args.dataset,
+        'DOMAIN_TYPE': args.domain_type,
+        'MODEL_NAME': args.model,
+        'DATA_DIR': args.data_dir,
+        'OT_DISTANCE_DIR': args.ot_distance_dir,
+        'CHECKPOINT_ROOT': args.checkpoint_root,
+        'LOG_ROOT': args.log_root,
+        'TRAIN_BATCH_SIZE': args.train_batch_size,
+        'EVAL_BATCH_SIZE': args.eval_batch_size,
+        'PATIENCE': args.patience,
+        'START_FROM_EPOCH': args.start_from_epoch,
+        'PRETRAIN_DOMAINS': list(range(62)),
+        'MODELS': {args.model: model_entry, args.model.upper(): model_entry},
+    }
 
     ot_params = None
-    if domain_selection_method == 'ot':
-        if tgt_domain is None or ot_embedding_type is None:
+    if args.domain_selection_method == 'ot':
+        if args.tgt_domain is None or args.ot_embedding_type is None:
             raise ValueError(
-                "For domain_selection_method='ot', provide --tgt_domain and --ot_embedding_type, "
-                "or set TARGET_DOMAINS/TGT_DOMAIN and OT_EMBEDDING_TYPE/OT_EMBEDDING_TYPES in config."
+                "For domain_selection_method='ot', provide --tgt_domain and --ot_embedding_type."
             )
         ot_params = {
-            'ot_distance_dir': config.get('OT_DISTANCE_DIR', None),
-            'source_domain_idx': tgt_domain,
-            'embedding_type': ot_embedding_type,
-            'method': ot_method or 'sinkhorn',
-            'reg': ot_reg or '0.01',
-            'iter': ot_iter or '1000',
-            'metric': ot_metric or 'cosine',
-            'norm': ot_norm or 'max',
+            'ot_distance_dir': args.ot_distance_dir,
+            'source_domain_idx': args.tgt_domain,
+            'embedding_type': args.ot_embedding_type,
+            'method': args.ot_method or 'sinkhorn',
+            'reg': args.ot_reg or '0.01',
+            'iter': args.ot_iter or '1000',
+            'metric': args.ot_metric or 'cosine',
+            'norm': args.ot_norm or 'max',
         }
-    
+
     trainer = PretrainSubsetTrainer(
-        config, model_data_seed, 
-        subset_size=subset_size, val_subset_size=val_subset_size,
-        num_domains=num_domains, domain_selection_method=domain_selection_method,
-        exclude_domains=exclude_domains, ot_params=ot_params, tgt_domain=tgt_domain
+        config, args.model_data_seed,
+        subset_size=args.subset_size, val_subset_size=args.val_subset_size,
+        num_domains=args.num_domains, domain_selection_method=args.domain_selection_method,
+        exclude_domains=args.exclude_domains, ot_params=ot_params, tgt_domain=args.tgt_domain
     )
-    
-    # Check if training is already completed
+
     if trainer._is_training_completed():
         print("⏭️  Skipping training - already completed")
         return
-    
+
     trainer.train()
 
 
@@ -352,18 +305,34 @@ if __name__ == '__main__':
     print("[INFO] Starting pretrain_by_domain_subset.py")
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--model_data_seed', type=int, default=None,
-                        help='Model/data seed (default: first of MODEL_DATA_SEEDS or MODEL_SEEDS in config)')
-    parser.add_argument('--subset_size', type=int, default=None, 
-                    help='Size B of subset to use from pretrain domain (None = use all data)')
-    parser.add_argument('--val_subset_size', type=int, default=None, 
-                    help='Size B of subset to use from val domain (None = use all data)')
+                        help='Model/data seed')
+    parser.add_argument('--dataset', default='geoyfcc_text')
+    parser.add_argument('--domain_type', default='countries')
+    parser.add_argument('--data_dir', default='./data')
+    parser.add_argument('--ot_distance_dir', default='./data/geoyfcc/distances/ot_distance/')
+    parser.add_argument('--checkpoint_root', default='./results/subset/checkpoints')
+    parser.add_argument('--log_root', default='./results/subset/logs')
+    parser.add_argument('--model', default='bert_singlelabel')
+    parser.add_argument('--lr', type=float, default=2e-5)
+    parser.add_argument('--num_epochs', type=int, default=50)
+    parser.add_argument('--optimizer', default='AdamW')
+    parser.add_argument('--weight_decay', type=float, default=0.01)
+    parser.add_argument('--scheduler', default='cosine')
+    parser.add_argument('--train_batch_size', type=int, default=64)
+    parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--start_from_epoch', type=int, default=0)
+    parser.add_argument('--subset_size', type=int, default=None,
+                        help='Size B of subset to use from pretrain domain (None = use all data)')
+    parser.add_argument('--val_subset_size', type=int, default=None,
+                        help='Size B of subset to use from val domain (None = use all data)')
     parser.add_argument('--num_domains', '-k', type=int, default=None,
-                    help='K: number of candidate domains to choose (default: all)')
+                        help='K: number of candidate domains to choose (default: all)')
     parser.add_argument('--domain_selection_method', type=str, default='random',
-                    choices=['random','ot','in_distribution','global'],
-                    help='Method for choosing candidate domains')
+                        choices=['random', 'ot', 'in_distribution', 'global'],
+                        help='Method for choosing candidate domains')
     parser.add_argument('--exclude_domains', type=int, default=None,
-                    help='Domains to exclude from candidate domains')
+                        help='Domains to exclude from candidate domains')
     # OT selection parameters
     parser.add_argument('--tgt_domain', type=int, default=None, help='Target domain for evaluation (e.g., OT source domain)')
     parser.add_argument('--ot_embedding_type', type=str, default=None, help='OT embedding type (e.g., geoclip)')
@@ -372,14 +341,4 @@ if __name__ == '__main__':
     parser.add_argument('--ot_iter', type=str, default=None, help='OT iterations (e.g., 1000)')
     parser.add_argument('--ot_metric', type=str, default=None, help='OT metric (e.g., cosine)')
     parser.add_argument('--ot_norm', type=str, default=None, help='OT normalization (e.g., max)')
-    parser.add_argument('--config', type=str, default="config.yaml", help="Path to config file")
-    args = parser.parse_args()
-
-    CONFIG = load_config(args.config)
-    main(CONFIG, args.model_data_seed,
-         subset_size=args.subset_size,
-         val_subset_size=args.val_subset_size,
-         num_domains=args.num_domains, domain_selection_method=args.domain_selection_method,
-         exclude_domains=args.exclude_domains,
-         tgt_domain=args.tgt_domain, ot_embedding_type=args.ot_embedding_type, ot_method=args.ot_method,
-         ot_reg=args.ot_reg, ot_iter=args.ot_iter, ot_metric=args.ot_metric, ot_norm=args.ot_norm)
+    main(parser.parse_args())

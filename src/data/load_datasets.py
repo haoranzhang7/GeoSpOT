@@ -23,7 +23,7 @@ if PROJECT_ROOT not in sys.path:
 def load_dataset(dataset_name: str, root_dir: str = "./data"):
     """Load dataset by name."""
     if dataset_name == "geoyfcc_text":
-        dataset = load_geoyfcc_text_dataset(root_dir=os.path.join(root_dir, "geoyfcc"))
+        dataset = load_geoyfcc_text_dataset(root_dir=os.path.join(root_dir, "geoyfcc_text"))
     elif dataset_name == "fmow":
         dataset = load_fmow_dataset(root_dir=os.path.join(root_dir, "fmow"))
     elif dataset_name == "geoyfcc_image":

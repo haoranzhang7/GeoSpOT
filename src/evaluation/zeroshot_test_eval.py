@@ -44,8 +44,6 @@ from src.core.utils import (
     format_metrics_vision, format_metrics_text
 )
 
-import yaml
-from src.core.config_utils import load_config
 
 
 def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_size, 
@@ -165,22 +163,35 @@ def save_results(results_all_seed, results_all_seed_with_preds, pretrain_domain_
     logger.info(f"Finish saving pickle to {pkl_filepath}")
 
 
-def main(config, pretrain_domain_idx, target_domain_idxs, subset_model=False, subset_size=None, num_domains=None, 
-         domain_selection_method=None, ot_embedding_type=None, ot_method=None, ot_reg=None, ot_iter=None, 
-         ot_metric=None, ot_norm=None, val_subset_size=None, tgt_domain=None):
+def main(args):
     """Main evaluation function."""
-    
+
     task_name = "zeroshot_eval"
     task_directory_name = "2_zeroshot_eval"
     training_task_name = "pretrain"
     training_task_directory_name = "1_pretrain"
 
+    pretrain_domain_idx = args.pretrain_domain
+    target_domain_idxs = args.target_domains
+    subset_model = args.subset_model
+    subset_size = args.subset_size
+    num_domains = args.num_domains
+    domain_selection_method = args.domain_selection_method
+    ot_embedding_type = args.ot_embedding_type
+    ot_method = args.ot_method
+    ot_reg = args.ot_reg
+    ot_iter = args.ot_iter
+    ot_metric = args.ot_metric
+    ot_norm = args.ot_norm
+    val_subset_size = args.val_subset_size
+    tgt_domain = args.tgt_domain
+
     # Setup device (single-GPU: cuda:0 if available)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    dataset_name = config["DATASET_NAME"]
-    spatial_split_types = config["DOMAIN_TYPE"]
-    model_name = config["MODEL_NAME"]
+    dataset_name = args.dataset
+    spatial_split_types = args.domain_type
+    model_name = args.model
 
     # Setup directories
     if subset_model:
@@ -190,33 +201,34 @@ def main(config, pretrain_domain_idx, target_domain_idxs, subset_model=False, su
             subset_suffix = f"_subset{subset_size}"
         if num_domains is not None:
             subset_suffix += f"_K{num_domains}_{domain_selection_method}"
-        
-        CHECKPOINT_DIR = os.path.join(config["CHECKPOINT_ROOT"], f"{training_task_directory_name}{subset_suffix}", model_name)
+
+        CHECKPOINT_DIR = os.path.join(args.checkpoint_root, f"{training_task_directory_name}{subset_suffix}", model_name)
     else:
         # For regular models, use the standard directory structure
-        CHECKPOINT_DIR = os.path.join(config["CHECKPOINT_ROOT"], training_task_directory_name, model_name)
-    LOG_DIR = os.path.join(config["LOG_ROOT"], task_directory_name, model_name)
-    
-    RESULTS_DIR = os.path.join(config.get("RESULTS_ROOT", "1_training_results/test_results"), task_directory_name, model_name)
+        CHECKPOINT_DIR = os.path.join(args.checkpoint_root, training_task_directory_name, model_name)
+    LOG_DIR = os.path.join(args.log_root, task_directory_name, model_name)
+
+    RESULTS_DIR = os.path.join(args.results_root, task_directory_name, model_name)
     CSV_DIR = os.path.join(RESULTS_DIR, "csv")
     JSON_DIR = os.path.join(RESULTS_DIR, "json")
     PKL_DIR = os.path.join(RESULTS_DIR, "pickle")
-    
+
     setup_directories([LOG_DIR, RESULTS_DIR, CSV_DIR, JSON_DIR, PKL_DIR])
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     log_filename = f"{task_name}_{spatial_split_types}_{model_name}_domain{pretrain_domain_idx}_{timestamp}.log"
     setup_logging(os.path.join(LOG_DIR, log_filename))
     logger = logging.getLogger(__name__)
-    
+
     print(f"Log stored at file logs/{log_filename}")
     logger.info(f"Log stored at file logs/{log_filename}")
 
     print("Loading Dataset...")
     logger.info("Loading Dataset...")
-    dataset = load_dataset(dataset_name, root_dir=config["DATA_DIR"])
+    dataset = load_dataset(dataset_name, root_dir=args.data_dir)
 
-    eval_batch_size = config["EVAL_BATCH_SIZE"]
+    eval_batch_size = args.eval_batch_size
+    model_seeds = args.seeds
 
     for target_domain_idx in target_domain_idxs:
         print('Target domain indices:', target_domain_idxs)
@@ -231,14 +243,14 @@ def main(config, pretrain_domain_idx, target_domain_idxs, subset_model=False, su
                 existing_seeds = set(existing_df['model_seed'].tolist())
                 print(f"Found existing CSV with seeds: {existing_seeds}")
                 logger.info(f"Found existing CSV with seeds: {existing_seeds}")
-                if len(existing_seeds) == len(config["MODEL_SEEDS"]):
+                if len(existing_seeds) == len(model_seeds):
                     print(f"All seeds already exist in CSV")
                     logger.info(f"All seeds already exist in CSV")
                     continue
-                
+
                 # Load existing results into results_all_seed
                 results_all_seed = existing_df.to_dict('records')
-                
+
                 # Try to load existing pickle file for results with predictions
                 pkl_filename = f"{task_name}_{spatial_split_types}_{model_name}_domains_src{pretrain_domain_idx}_tgt{target_domain_idx}.pkl"
                 pkl_filepath = os.path.join(PKL_DIR, pkl_filename)
@@ -246,7 +258,7 @@ def main(config, pretrain_domain_idx, target_domain_idxs, subset_model=False, su
                     with open(pkl_filepath, 'rb') as file:
                         existing_pkl_data = pickle.load(file)
                         results_all_seed_with_preds = [existing_pkl_data[seed] for seed in existing_seeds if seed in existing_pkl_data]
-                        
+
             except Exception as e:
                 print(f"Error reading existing CSV: {e}")
                 logger.error(f"Error reading existing CSV: {e}")
@@ -260,8 +272,6 @@ def main(config, pretrain_domain_idx, target_domain_idxs, subset_model=False, su
         print(f"Start Evaluation on domain {target_domain_idx}")
         logger.info(f"Start Evaluation on domain {target_domain_idx}")
 
-        model_seeds = config["MODEL_SEEDS"]
-        
         for model_seed in model_seeds:
             # Setup random seeds
             g = setup_seeds(model_seed)
@@ -365,7 +375,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--pretrain_domain', type=int, required=True, help='Domain to pretrain model')
     parser.add_argument('-t', '--target_domains', type=int, nargs="+", required=True, help='Domain to test model')
-    parser.add_argument('--config', type=str, default="config.yaml", help="Path to config file")
+    parser.add_argument('--dataset', default='geoyfcc_text')
+    parser.add_argument('--domain_type', default='countries')
+    parser.add_argument('--data_dir', default='./data')
+    parser.add_argument('--checkpoint_root', default='./results/pretrain/checkpoints')
+    parser.add_argument('--log_root', default='./results/zeroshot/logs')
+    parser.add_argument('--results_root', default='./results/zeroshot/test_results')
+    parser.add_argument('--model', default='bert_singlelabel')
+    parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
     # Subset model evaluation parameters
     parser.add_argument('--subset_model', action='store_true', help='Use subset-trained model')
     parser.add_argument('--subset_size', type=int, help='Subset size B used for training')
@@ -381,16 +399,4 @@ if __name__ == '__main__':
     parser.add_argument('--tgt_domain', type=int, help='Target domain used for training')
     args = parser.parse_args()
 
-    # Handle relative config paths
-    config_path = args.config
-    if not os.path.isabs(config_path):
-        # If not absolute, assume it's relative to project root (one level up from src_dir)
-        project_root = os.path.dirname(src_dir)
-        config_path = os.path.abspath(os.path.join(project_root, 'SatOT', config_path))
-    config = load_config(config_path)
-    
-    main(config, args.pretrain_domain, args.target_domains,
-         subset_model=args.subset_model, subset_size=args.subset_size, num_domains=args.num_domains,
-         domain_selection_method=args.domain_selection_method, ot_embedding_type=args.ot_embedding_type,
-         ot_method=args.ot_method, ot_reg=args.ot_reg, ot_iter=args.ot_iter, ot_metric=args.ot_metric,
-         ot_norm=args.ot_norm, val_subset_size=args.val_subset_size, tgt_domain=args.tgt_domain)
+    main(args)

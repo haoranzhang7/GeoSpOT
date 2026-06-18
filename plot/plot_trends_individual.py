@@ -1,132 +1,78 @@
 
-import numpy as np
+import os
+import argparse
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import matplotlib
 from matplotlib.colors import to_rgb
 
 from scipy.stats import spearmanr
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-import os
-import argparse
-import itertools
-
 # If plot font needs to be Times New Roman
 # matplotlib.rcParams['font.family'] = 'Times New Roman'
 
+DISTANCE_COLOR_MAP = {
+    'ot': 'cornflowerblue',
+    'mmd': 'mediumorchid',
+    'fid': 'orange',
+    'cosine': 'green',
+    'arc': 'darkorange',
+}
 
-def rescale_acc(raw_acc):
-    diags = np.diagonal(raw_acc)
-    return (raw_acc - diags) * 100 / diags
+
+def infer_distance_type(distance_file):
+    """Guess a distance type label (ot/mmd/fid/cosine/arc) from the filename."""
+    stem = os.path.basename(distance_file).lower()
+    for known_type in DISTANCE_COLOR_MAP:
+        if known_type in stem:
+            return known_type
+    return os.path.splitext(os.path.basename(distance_file))[0]
 
 
-def load_distance_results(distance_type, spatial_splits, is_satclip=False, model_name="resnet50", resolution=None):
+def load_distance_matrix(distance_file, distance_type):
+    """Load a square N x N distance matrix CSV (rows/cols = domain indices) into long format."""
+    matrix = pd.read_csv(distance_file, index_col=0)
+    matrix.index = matrix.index.astype(int)
+    matrix.columns = matrix.columns.astype(int)
 
-    assert distance_type in ['cosine', 'ot', 'arc'], "Options for distance_type: ['cosine', 'ot', 'arc']"
-    assert is_satclip in [True, False], "is_satclip must be a boolean variable"
-    assert model_name in ['resnet50'], "Options for distance models: ['resnet50']"
-    if is_satclip:
-        assert resolution in [10, 40], "Options for resolution: [10, 40] for is_satclip=True"
-
-    num_domains_dict = {'continent': 5,
-                        'country_top40': 40,
-                        'checkerboard_10': 10}
-    num_domains = num_domains_dict[spatial_splits]
-    domain_pair_indices = list(itertools.product(range(num_domains), range(num_domains)))
-
-    ROOT_DIR = os.path.join("..", "..", "00_results")
-    if distance_type == 'arc':
-        DISTANCE_DIR = os.path.join(ROOT_DIR, "arc_distances", f"{spatial_splits}")
-    else:
-        embedding_dir_name = "satclip_embedding_results" if is_satclip else "img_embedding_results"
-        distance_dir_name = "ot_distances" if distance_type == 'ot' else "cosine_distances"
-        model_dir_name = f"{model_name}_l{resolution}" if is_satclip else f"{model_name}"
-        DISTANCE_DIR = os.path.join(ROOT_DIR, embedding_dir_name, distance_dir_name, f"{model_dir_name}", f"{spatial_splits}")
-
-    SUMMARY_DIR = os.path.join(DISTANCE_DIR, "summary_raw")
-
-    if distance_type == 'arc':
-        distance_filename = f"{distance_type}_distance"
-        summary_id_filename = "avg"
-        
-        summary_filename_base = f"arc_distance_{spatial_splits}_{summary_id_filename}_summary"
-        summary_filepath = os.path.join(SUMMARY_DIR, f"{summary_filename_base}.npy")
-    else:
-        distance_filename = f"{distance_type}_distance"
-        model_filename = f"{model_name}_l{resolution}" if is_satclip else f"{model_name}"
-        summary_id_filename = "avg" if distance_type == 'cosine' else f"eps0.01_linearOT"
-
-        summary_filename_base = f"{distance_filename}_{model_filename}_{spatial_splits}_{summary_id_filename}_summary"
-        summary_filepath = os.path.join(SUMMARY_DIR, f"{summary_filename_base}.npy")
-    
-    dist_type_id = 'Cosine Dist' if distance_type == 'cosine' else 'OT Dist' if distance_type == 'ot' else 'Arc Dist'
-    dist_type = f"{dist_type_id}" if distance_type == 'arc' else \
-                    f"{dist_type_id} - {model_name.capitalize()} (L={resolution})" if is_satclip else \
-                    f"{dist_type_id} - {model_name.capitalize()}"
-    dist_filename_str = f"{distance_type}_dist" if distance_type == 'arc' else \
-                            f"{distance_type}_dist_{model_name}_l{resolution}" if is_satclip else \
-                            f"{distance_type}_dist_{model_name}"
-    color_map = {('cosine', False): 'green',
-                 ('cosine', True): 'springgreen',
-                 ('ot', False): 'cornflowerblue',
-                 ('ot', True): 'turquoise',
-                 ('arc', False): 'orange'}
-    distance_summary = np.load(summary_filepath)
-    distance_df = pd.DataFrame([{'src_domain_idx': src_domain_idx,
-                                 'tgt_domain_idx': tgt_domain_idx,
-                                 'dist_value': distance_summary[src_domain_idx, tgt_domain_idx],
-                                 'dist_type': dist_type,
-                                 'is_self_pair': src_domain_idx == tgt_domain_idx,
-                                 'dist_filename_str': dist_filename_str,
-                                 'color': color_map[(distance_type, is_satclip)]}
-                                 for src_domain_idx, tgt_domain_idx in domain_pair_indices])
+    distance_df = matrix.stack(future_stack=True).rename('dist_value').rename_axis(['src_domain_idx', 'tgt_domain_idx']).reset_index()
+    distance_df['is_self_pair'] = distance_df['src_domain_idx'] == distance_df['tgt_domain_idx']
+    distance_df['distance_type'] = distance_type
     return distance_df
 
-def load_domain_adaptation_results(finetune_size, model_name, spatial_splits, rescale_acc_flag):
 
-    assert finetune_size in [0, 5, 10], "Options for finetune settings: [0, 5, 10]"
-    assert model_name in ['resnet50', 'densenet121'], "Options for domain adaptation models: ['resnet50', 'densenet121']"
+def rescale_metric(results_df, metric):
+    """Rescale metric as the relative (%) change from each source domain's self-pair value."""
+    self_pair_values = results_df.loc[
+        results_df['src_domain_idx'] == results_df['tgt_domain_idx']
+    ].set_index('src_domain_idx')[metric]
 
-    num_domains_dict = {'continent': 5,
-                        'country_top40': 40,
-                        'checkerboard_10': 10}
-    num_domains = num_domains_dict[spatial_splits]
-    domain_pair_indices = list(itertools.product(range(num_domains), range(num_domains)))
+    baseline = results_df['src_domain_idx'].map(self_pair_values)
+    rescaled = results_df.copy()
+    rescaled[metric] = (results_df[metric] - baseline) * 100 / baseline
+    return rescaled
 
-    task_name = "zeroshot_eval" if finetune_size == 0 else f"{finetune_size}shot_eval"
-    finetune_info = f"ft{finetune_size}shot"
-    acc_name_in_file = f"top1acc"
-    agg_func_name = "avg"
 
-    ROOT_DIR = os.path.join("..", "..", "00_results", "domain_adaptation_results", "test_results")
-    SUMMARY_DIR = os.path.join(ROOT_DIR, f"{task_name}", f"{spatial_splits}", f"{model_name}")
+def load_results(results_file, metric, rescale_acc_flag):
+    results_df = pd.read_csv(results_file)
+    for required_col in ('src_domain_idx', 'tgt_domain_idx'):
+        if required_col not in results_df.columns:
+            raise ValueError(f"Results file is missing required column '{required_col}'")
+    if metric not in results_df.columns:
+        raise ValueError(f"Metric '{metric}' not found in results file. Available columns: {list(results_df.columns)}")
 
-    summary_filename_base = f"{task_name}_{spatial_splits}_{model_name}_{acc_name_in_file}_{agg_func_name}_summary" if finetune_size == 0 else \
-                            f"{task_name}_{spatial_splits}_{model_name}_{finetune_info}_{acc_name_in_file}_{agg_func_name}_summary"
-    summary_filepath = os.path.join(SUMMARY_DIR, f"{summary_filename_base}.npy")
-    domain_adaptation_summary = np.load(summary_filepath)
     if rescale_acc_flag:
-        domain_adaptation_summary = rescale_acc(domain_adaptation_summary)
+        results_df = rescale_metric(results_df, metric)
 
-    transfer_setting = f"{finetune_size}-shot {model_name.capitalize()}"
-    domain_adaptation_df = pd.DataFrame([{'src_domain_idx': src_domain_idx,
-                                          'tgt_domain_idx': tgt_domain_idx,
-                                          'acc_value': domain_adaptation_summary[src_domain_idx, tgt_domain_idx],
-                                          'transfer_setting': transfer_setting,
-                                          'adaptation_filename_str': f"{finetune_size}shot_{model_name}"}
-                                          for src_domain_idx, tgt_domain_idx in domain_pair_indices])
-    return domain_adaptation_df
+    return results_df[['src_domain_idx', 'tgt_domain_idx', metric]].rename(columns={metric: 'acc_value'})
 
-def plot_trends(df, filename, title_name,
-                x_title, y_title,
-                figsize=(10, 10)):
 
+def plot_trends(df, filename, title_name, x_title, y_title, color, figsize=(10, 10)):
     scatter_x = 'dist_value'
     scatter_y = 'acc_value'
-    color = df['color'].unique()[0]
     scatter_color = tuple(0.7 * c for c in to_rgb(color))
 
     fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -156,81 +102,78 @@ def plot_trends(df, filename, title_name,
     plt.close()
 
 
+def main(args):
+    os.makedirs(args.output_dir, exist_ok=True)
 
-def main(spatial_splits, include_self_pair, rescale_acc_flag, mask_outlier_domains):
+    distance_type = args.distance_type or infer_distance_type(args.distance_file)
+    distance_df = load_distance_matrix(args.distance_file, distance_type)
+    results_df = load_results(args.results_file, args.metric, args.rescale_acc)
 
-    PLOT_DIR = os.path.join(".", f"trend_plots_by_dist_type_{spatial_splits}")
-    for dir_path in [PLOT_DIR]:
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path, exist_ok=True)
+    combined_df = pd.merge(distance_df, results_df, how='inner', on=['src_domain_idx', 'tgt_domain_idx'])
+    combined_df = combined_df.dropna(subset=['dist_value', 'acc_value'])
 
-    distance_df = pd.concat([load_distance_results('cosine', spatial_splits, is_satclip=False, model_name='resnet50'),
-                             load_distance_results('cosine', spatial_splits, is_satclip=True, model_name='resnet50', resolution=10),
-                             load_distance_results('cosine', spatial_splits, is_satclip=True, model_name='resnet50', resolution=40),
-                             load_distance_results('ot', spatial_splits, is_satclip=False, model_name='resnet50'),
-                             load_distance_results('ot', spatial_splits, is_satclip=True, model_name='resnet50', resolution=10),
-                             load_distance_results('ot', spatial_splits, is_satclip=True, model_name='resnet50', resolution=40),
-                             load_distance_results('arc', spatial_splits)])
-
-    finetune_size_list = [0, 5, 10] if spatial_splits == 'continent' else [0, 5]
-    domain_adaptation_df = pd.concat([load_domain_adaptation_results(finetune_size, model_name, spatial_splits, rescale_acc_flag)
-                                        for finetune_size in finetune_size_list for model_name in ['resnet50', 'densenet121']])
-
-    combined_df = pd.merge(distance_df, domain_adaptation_df, how='inner', on=['src_domain_idx', 'tgt_domain_idx'])
-    if not include_self_pair:
+    if not args.include_self_pair:
         combined_df = combined_df[~combined_df['is_self_pair']]
 
-    exclude_domain_idx_list = []
-    if mask_outlier_domains:
-        if spatial_splits == 'continent':
-            exclude_domain_idx_list = [4]
-        elif spatial_splits == 'country_top40':
-            return
-        elif spatial_splits == 'checkerboard_10':
-            exclude_domain_idx_list = [5, 6]
-        for exclude_domain_idx in exclude_domain_idx_list:
-            combined_df = combined_df[(combined_df['src_domain_idx'] != exclude_domain_idx) & 
-                                      (combined_df['tgt_domain_idx'] != exclude_domain_idx)]
+    if args.mask_domains:
+        combined_df = combined_df[
+            ~combined_df['src_domain_idx'].isin(args.mask_domains) &
+            ~combined_df['tgt_domain_idx'].isin(args.mask_domains)
+        ]
 
-    for dist_type in combined_df['dist_type'].unique():
-        for transfer_setting in combined_df['transfer_setting'].unique():
-            df_subset = combined_df[(combined_df['dist_type'] == dist_type) & (combined_df['transfer_setting'] == transfer_setting)]
+    if combined_df.empty:
+        raise ValueError("No domain pairs left to plot after filtering - check distance_file/results_file overlap and filters.")
 
-            title_name = f"Domain Adaptation Performance vs. Domain Distances Trend Plot\n" + \
-                            f"Spatial Splits: {spatial_splits.capitalize()},\n" + \
-                            f"Domain Adaptaion Setting: {transfer_setting},\n" + \
-                            f"Distance Type: {dist_type}"
+    color = DISTANCE_COLOR_MAP.get(distance_type.lower(), 'steelblue')
 
-            if mask_outlier_domains:
-                title_name += f"\nExclude outlier domains: {', '.join([str(i) for i in exclude_domain_idx_list])}"
-            
-            x_title = "Domain Distance"
-            y_title = "Relative Change in Test Accuracy (%)" if rescale_acc_flag else "Domain Adaptaion Test Accuracy"
+    x_title = f"Domain Distance ({distance_type})"
+    y_title = "Relative Change in Test Accuracy (%)" if args.rescale_acc else args.metric.replace('_', ' ').title()
 
-            dist_type_str = df_subset['dist_filename_str'].unique()[0]
-            domain_adaptation_str = df_subset['adaptation_filename_str'].unique()[0]
-            include_self_pair_str = "inc-self" if include_self_pair else "exc-self"
-            rescale_acc_str = "rescale_acc" if rescale_acc_flag else "raw_acc"
-            mask_domain_str = f"_mask{','.join([str(i) for i in exclude_domain_idx_list])}" if mask_outlier_domains else ""
-            plot_filename = f"trend_plots_{spatial_splits}_{dist_type_str}_{domain_adaptation_str}_{include_self_pair_str}_{rescale_acc_str}{mask_domain_str}.png"
-            plot_filepath = os.path.join(PLOT_DIR, plot_filename)
+    if args.title:
+        title_name = args.title
+    else:
+        title_name = "Domain Adaptation Performance vs. Domain Distance Trend Plot\n" + \
+                        f"Distance Type: {distance_type},\n" + \
+                        f"Metric: {args.metric}"
+        if args.mask_domains:
+            title_name += f"\nExcluded domains: {', '.join(str(i) for i in args.mask_domains)}"
 
-            plot_trends(df_subset, plot_filepath, title_name, x_title, y_title)
+    include_self_pair_str = "inc-self" if args.include_self_pair else "exc-self"
+    rescale_acc_str = "rescale_acc" if args.rescale_acc else "raw_acc"
+    mask_domain_str = f"_mask{','.join(str(i) for i in args.mask_domains)}" if args.mask_domains else ""
+    distance_type_slug = distance_type.lower().replace(' ', '_')
+    plot_filename = f"trend_{distance_type_slug}_{args.metric}_{include_self_pair_str}_{rescale_acc_str}{mask_domain_str}.png"
+    plot_filepath = os.path.join(args.output_dir, plot_filename)
 
+    plot_trends(combined_df, plot_filepath, title_name, x_title, y_title, color, figsize=tuple(args.figsize))
+    print(f"Saved plot to {plot_filepath}")
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--spatial_splits', type=str, required=True, choices=['continent', 'country_top40', 'checkerboard_10'], help='Spatial splits for domain definition')
-    # parser.add_argument('--include_self_pair', type=bool, default=True, action=argparse.BooleanOptionalAction)
-    # parser.add_argument('--rescale_acc_flag', type=bool, default=True, action=argparse.BooleanOptionalAction)
-    
+    parser.add_argument('--distance_file', type=str, required=True,
+                        help="Path to a square N x N distance matrix CSV (rows/cols = domain indices), e.g. an OT, MMD, FID, or cosine distance matrix.")
+    parser.add_argument('--distance_type', type=str, default=None,
+                        help="Label for the distance metric, e.g. 'ot', 'mmd', 'fid', 'cosine'. Inferred from the filename if omitted.")
+    parser.add_argument('--results_file', type=str, required=True,
+                        help="Path to the combined transfer-performance results CSV (long format with src_domain_idx/tgt_domain_idx columns).")
+    parser.add_argument('--metric', type=str, default='avg_test_acc',
+                        help="Column in results_file to use as the y-axis (e.g. avg_test_acc, avg_test_top3_acc, avg_test_top5_acc).")
+    parser.add_argument('--output_dir', type=str, default='./trend_plots',
+                        help="Directory to save the plot in.")
+    parser.add_argument('--include_self_pair', action='store_true',
+                        help="Include src==tgt domain pairs in the plot.")
+    parser.add_argument('--rescale_acc', action='store_true',
+                        help="Rescale the metric as the relative (%%) change from each source domain's self-pair value.")
+    parser.add_argument('--mask_domains', type=int, nargs='*', default=[],
+                        help="Domain indices to exclude from both src and tgt.")
+    parser.add_argument('--title', type=str, default=None,
+                        help="Override the auto-generated plot title.")
+    parser.add_argument('--figsize', type=float, nargs=2, default=(10, 10),
+                        help="Figure size as 'width height'.")
+
     args = parser.parse_args()
 
-    for include_self_pair in [False]:
-        for rescale_acc_flag in [True]:
-            for mask_domains_with_few_data in [False, True]:
-                main(args.spatial_splits, include_self_pair, rescale_acc_flag, mask_domains_with_few_data)
-
+    main(args)

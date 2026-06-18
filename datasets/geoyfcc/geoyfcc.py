@@ -1,3 +1,4 @@
+import ast
 import os
 import pickle
 import numpy as np
@@ -11,6 +12,24 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+
+def _parse_label_ids(val) -> list:
+    """Parse label_id field into a list of ints, handling all storage formats."""
+    if isinstance(val, str):
+        try:
+            result = ast.literal_eval(val)
+            return [int(result)] if isinstance(result, (int, float)) else [int(x) for x in result]
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(val, (int, float)):
+        return [] if pd.isna(val) else [int(val)]
+    if hasattr(val, '__iter__'):
+        try:
+            return [int(x) for x in val if x is not None and not (isinstance(x, float) and pd.isna(x))]
+        except (TypeError, ValueError):
+            return []
+    return []
+
 
 def clean_text(text) -> str:
     if pd.isna(text) or not text:
@@ -59,70 +78,23 @@ class GeoYFCCBase(Dataset):
             self._expand_to_single_label()
 
     def _expand_to_single_label(self):
-        """Expand multi-label samples to single-label samples.
-        
-        This method handles cases where label_id might contain multiple labels.
-        If your data is already single-label, this can be skipped.
-        """
         print("[INFO] Expanding multi-label dataset to single-label...")
-        expanded_rows = []
-        
+        rows = []
         for idx, row in tqdm(self.df.iterrows(), total=len(self.df), desc="Expanding samples"):
-            # Parse label_id - handle different formats
-            label_ids = row.get("label_id", [])
-            
-            # Handle string representation of lists like "[1, 2, 3]"
-            if isinstance(label_ids, str):
-                try:
-                    # Remove brackets and split by comma
-                    if label_ids.startswith('[') and label_ids.endswith(']'):
-                        label_ids = label_ids[1:-1]
-                    if label_ids.strip():
-                        label_ids = [int(x.strip()) for x in label_ids.split(',') if x.strip()]
-                    else:
-                        label_ids = []
-                except (ValueError, AttributeError):
-                    # If it's just a single number as string
-                    try:
-                        label_ids = [int(label_ids)]
-                    except ValueError:
-                        label_ids = []
-            
-            # Handle actual list or other iterable
-            elif hasattr(label_ids, '__iter__') and not isinstance(label_ids, str):
-                try:
-                    label_ids = [int(x) for x in label_ids if x is not None]
-                except (ValueError, TypeError):
-                    label_ids = []
-            
-            # Handle single numeric value
-            elif isinstance(label_ids, (int, float)) and not pd.isna(label_ids):
-                label_ids = [int(label_ids)]
-            else:
-                label_ids = []
-            
-            # Skip samples with no labels
-            if not label_ids:
-                continue
-                
-            # Create one sample for each label
-            for label_id in label_ids:
+            for label_id in _parse_label_ids(row.get("label_id", [])):
                 new_row = row.copy()
-                new_row['label_id'] = label_id  # Single label
+                new_row['label_id'] = label_id
                 new_row['original_yfcc_row_id'] = row.get('yfcc_row_id', idx)
-                # Create unique ID for this expanded sample
                 new_row['yfcc_row_id'] = f"{row.get('yfcc_row_id', idx)}_{label_id}"
-                expanded_rows.append(new_row)
-        
-        # Replace the original dataframe with expanded one
-        self.df = pd.DataFrame(expanded_rows).reset_index(drop=True)
+                rows.append(new_row)
+        self.df = pd.DataFrame(rows).reset_index(drop=True)
         print(f"[INFO] Expanded to {len(self.df)} single-label samples")
 
     def get_coordinates(self, idx: int) -> Tuple[Optional[float], Optional[float]]:
         """Return (latitude, longitude) for a sample index, or (None, None)."""
         row = self.df.iloc[idx]
-        lat = row.get("lat")
-        lon = row.get("lon")
+        lat = row.get("latitude")
+        lon = row.get("longitude")
         if pd.notna(lat) and pd.notna(lon):
             return float(lat), float(lon)
         return None, None
@@ -248,17 +220,9 @@ class GeoYFCCText(GeoYFCCBase):
         """Filter out samples with empty combined text."""
         if self.filter_text_enabled:
             print("[INFO] Filtering out samples with empty combined text...")
-            valid_mask = self.df.apply(
-                lambda row: bool(
-                    (
-                        "" if pd.isna(row.get("title")) else str(row.get("title")) 
-                        + " " + 
-                        "" if pd.isna(row.get("description")) else str(row.get("description"))
-                    ).strip()
-                ), 
-                axis=1
-            )
-            self.df = self.df[valid_mask].reset_index(drop=True)
+            combined = (self.df["title"].fillna("").astype(str) + " " +
+                        self.df["description"].fillna("").astype(str)).str.strip()
+            self.df = self.df[combined.astype(bool)].reset_index(drop=True)
             print(f"[INFO] {len(self.df)} samples remaining after text filtering")
 
     def save_filtered_dataset(self):
@@ -297,91 +261,30 @@ class GeoYFCCText(GeoYFCCBase):
         else:
             plt.show()
 
+def _filter_dataset(dataset, mask, file_suffix=None):
+    """Return a copy of dataset filtered to rows where mask is True."""
+    copy = type(dataset).__new__(type(dataset))
+    for attr, val in dataset.__dict__.items():
+        setattr(copy, attr, dataset.df[mask].reset_index(drop=True) if attr == 'df' else val)
+    if file_suffix and hasattr(copy, 'filtered_file'):
+        base = os.path.splitext(os.path.basename(copy.filtered_file))[0]
+        copy.filtered_file = os.path.join(os.path.dirname(copy.filtered_file), f"{base}{file_suffix}.pkl")
+    return copy
+
+
 def get_domain_indices_from_geoyfcc(dataset, domain_idx: int) -> Tuple[List[int], 'GeoYFCCBase']:
-    """
-    Get indices and subset dataset for samples belonging to a specific domain (country_id).
-    
-    Args:
-        dataset: GeoYFCCBase or subclass instance
-        domain_idx: The country_id to filter by
-        
-    Returns:
-        Tuple[List[int], GeoYFCCBase]: 
-            - List of original dataset indices that match the domain
-            - New dataset instance containing only samples from that domain
-    """
     if not hasattr(dataset, 'df') or 'country_id' not in dataset.df.columns:
         raise ValueError("Dataset must have a 'df' attribute with 'country_id' column")
-    
-    # Find indices where country_id matches domain_idx
-    matching_mask = dataset.df['country_id'] == domain_idx
-    matching_indices = dataset.df.index[matching_mask].tolist()
-    
-    #print(f"Country names matched: {matching_countries}")
-    # We'll create a copy of the original dataset but with filtered df
-    domain_dataset = type(dataset).__new__(type(dataset))
-    
-    # Copy all attributes from original dataset
-    for attr_name, attr_value in dataset.__dict__.items():
-        if attr_name == 'df':
-            # Filter the dataframe for the specific domain and reset index
-            domain_dataset.df = dataset.df[matching_mask].reset_index(drop=True)
-        else:
-            # Copy other attributes as-is
-            setattr(domain_dataset, attr_name, attr_value)
-    
-    # Update filtered_file path to reflect the domain filtering
-    if hasattr(domain_dataset, 'filtered_file'):
-        base_path = os.path.dirname(domain_dataset.filtered_file)
-        base_name = os.path.splitext(os.path.basename(domain_dataset.filtered_file))[0]
-        domain_dataset.filtered_file = os.path.join(
-            base_path, f"{base_name}_domain_{domain_idx}.pkl"
-        )
-    
-    return matching_indices, domain_dataset
+    mask = dataset.df['country_id'] == domain_idx
+    return dataset.df.index[mask].tolist(), _filter_dataset(dataset, mask, f"_domain_{domain_idx}")
 
 
 def get_domain_indices_by_country_name(dataset, country_name: str) -> Tuple[List[int], 'GeoYFCCBase']:
-    """
-    Get indices and subset dataset for samples belonging to a specific country by name.
-    
-    Args:
-        dataset: GeoYFCCBase or subclass instance  
-        country_name: The country name to filter by (case-insensitive)
-        
-    Returns:
-        Tuple[List[int], GeoYFCCBase]:
-            - List of original dataset indices that match the country
-            - New dataset instance containing only samples from that country
-    """
     if not hasattr(dataset, 'df') or 'country_name' not in dataset.df.columns:
         raise ValueError("Dataset must have a 'df' attribute with 'country_name' column")
-    
-    # Find indices where country matches (case-insensitive)
-    matching_mask = dataset.df['country_name'].str.lower() == country_name.lower()
-    matching_indices = dataset.df.index[matching_mask].tolist()
-    
-    # Print country names found
-    matching_countries = dataset.df.loc[matching_mask, 'country_name'].unique()
-    #print(f"Country names matched: {matching_countries}")
-    
-    # Create filtered dataset
-    domain_dataset = type(dataset).__new__(type(dataset))
-    for attr_name, attr_value in dataset.__dict__.items():
-        if attr_name == 'df':
-            domain_dataset.df = dataset.df[matching_mask].reset_index(drop=True)
-        else:
-            setattr(domain_dataset, attr_name, attr_value)
-    
-    if hasattr(domain_dataset, 'filtered_file'):
-        base_path = os.path.dirname(domain_dataset.filtered_file)
-        base_name = os.path.splitext(os.path.basename(domain_dataset.filtered_file))[0]
-        safe_country_name = re.sub(r'[^\w\-_]', '_', country_name.lower())
-        domain_dataset.filtered_file = os.path.join(
-            base_path, f"{base_name}_country_{safe_country_name}.pkl"
-        )
-    
-    return matching_indices, domain_dataset
+    mask = dataset.df['country_name'].str.lower() == country_name.lower()
+    safe = re.sub(r'[^\w\-_]', '_', country_name.lower())
+    return dataset.df.index[mask].tolist(), _filter_dataset(dataset, mask, f"_country_{safe}")
 
 def list_available_domains_from_geoyfcc(root_path: str, return_countries: bool=False, force_refresh: bool=False, split='train'):
     """List all available domains with caching for maximum speed."""
@@ -493,20 +396,9 @@ def list_available_domains_from_geoyfcc(root_path: str, return_countries: bool=F
     return domain_ids
 
 def get_split_indices(dataset, split) -> List[int]:
-    if split == 'train':
-        train_mask = dataset.df['split'] == 'train'
-        train_indices = dataset.df.index[train_mask].tolist()
-        return train_indices
-    elif split == 'val':
-        val_mask = dataset.df['split'] == 'val'
-        val_indices = dataset.df.index[val_mask].tolist()
-        return val_indices
-    elif split == 'test':
-        test_mask = dataset.df['split'] == 'test'
-        test_indices = dataset.df.index[test_mask].tolist()
-        return test_indices
-    else:
-        raise ValueError
+    if split not in ('train', 'val', 'test'):
+        raise ValueError(f"Unknown split: {split}")
+    return dataset.df.index[dataset.df['split'] == split].tolist()
 
 if __name__ == "__main__":
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

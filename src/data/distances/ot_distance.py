@@ -79,14 +79,9 @@ def merge_configs(base_config: dict, dataset_config: dict, experiment_config: di
     
     return merged
 
-# Default config path
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "experiments" / "ot_distance.yaml"
-
-# Load configurations
-base_config = load_base_config()
-dataset_config = load_dataset_config()
-
-# Global config variable (will be set by main function)
+# Global config variables (set by main function)
+base_config = None
+dataset_config = None
 config = None
 
 # ==================== Constants ====================
@@ -627,14 +622,16 @@ def parse_args():
 
 def main():
     args = parse_args()
-    
+
     # Load configuration
-    global config
+    global config, base_config, dataset_config
+    base_config = load_base_config()
+    dataset_config = load_dataset_config()
     if args.config:
         experiment_config = load_experiment_config(args.config)
     else:
-        experiment_config = load_experiment_config(str(DEFAULT_CONFIG_PATH))
-    
+        raise ValueError("--config is required (configs/ directory has been removed; pass an explicit config path)")
+
     config = merge_configs(base_config, dataset_config, experiment_config)
     
     # Initialize from config
