@@ -188,7 +188,7 @@ python src/evaluation/zeroshot_test_eval.py \
 Compute optimal transport distances between domains:
 
 ```bash
-python compute_distances/ot_distance.py \
+python src/distances/ot_distance.py \
     --config configs/experiments/ot_distance_fmow.yaml
 ```
 

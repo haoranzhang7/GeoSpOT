@@ -70,6 +70,16 @@ def load_results(results_file, metric, rescale_acc_flag):
     return results_df[['src_domain_idx', 'tgt_domain_idx', metric]].rename(columns={metric: 'acc_value'})
 
 
+def exclude_domains(combined_df, domain_indices):
+    """Drop pairs where src or tgt domain idx is in domain_indices."""
+    if not domain_indices:
+        return combined_df
+    return combined_df[
+        ~combined_df['src_domain_idx'].isin(domain_indices) &
+        ~combined_df['tgt_domain_idx'].isin(domain_indices)
+    ]
+
+
 def plot_trends(df, filename, title_name, x_title, y_title, color, figsize=(10, 10)):
     scatter_x = 'dist_value'
     scatter_y = 'acc_value'
@@ -115,34 +125,34 @@ def main(args):
     if not args.include_self_pair:
         combined_df = combined_df[~combined_df['is_self_pair']]
 
-    if args.mask_domains:
-        combined_df = combined_df[
-            ~combined_df['src_domain_idx'].isin(args.mask_domains) &
-            ~combined_df['tgt_domain_idx'].isin(args.mask_domains)
-        ]
+    combined_df = exclude_domains(combined_df, args.mask_domains)
+    combined_df = exclude_domains(combined_df, args.outlier_domains)
 
     if combined_df.empty:
         raise ValueError("No domain pairs left to plot after filtering - check distance_file/results_file overlap and filters.")
 
     color = DISTANCE_COLOR_MAP.get(distance_type.lower(), 'steelblue')
 
-    x_title = f"Domain Distance ({distance_type})"
+    x_title = args.x_title or f"Domain Distance ({distance_type})"
     y_title = "Relative Change in Test Accuracy (%)" if args.rescale_acc else args.metric.replace('_', ' ').title()
 
     if args.title:
         title_name = args.title
     else:
         title_name = "Domain Adaptation Performance vs. Domain Distance Trend Plot\n" + \
-                        f"Distance Type: {distance_type},\n" + \
+                        f"Distance Type: {distance_type.upper()},\n" + \
                         f"Metric: {args.metric}"
         if args.mask_domains:
             title_name += f"\nExcluded domains: {', '.join(str(i) for i in args.mask_domains)}"
+        if args.outlier_domains:
+            title_name += f"\nExcluded outliers: {', '.join(str(i) for i in args.outlier_domains)}"
 
     include_self_pair_str = "inc-self" if args.include_self_pair else "exc-self"
     rescale_acc_str = "rescale_acc" if args.rescale_acc else "raw_acc"
     mask_domain_str = f"_mask{','.join(str(i) for i in args.mask_domains)}" if args.mask_domains else ""
-    distance_type_slug = distance_type.lower().replace(' ', '_')
-    plot_filename = f"trend_{distance_type_slug}_{args.metric}_{include_self_pair_str}_{rescale_acc_str}{mask_domain_str}.png"
+    outlier_str = f"_outlier{','.join(str(i) for i in args.outlier_domains)}" if args.outlier_domains else ""
+    distance_type = distance_type.lower().replace(' ', '_')
+    plot_filename = f"trend_{distance_type}_{args.metric}_{include_self_pair_str}_{rescale_acc_str}{mask_domain_str}{outlier_str}.png"
     plot_filepath = os.path.join(args.output_dir, plot_filename)
 
     plot_trends(combined_df, plot_filepath, title_name, x_title, y_title, color, figsize=tuple(args.figsize))
@@ -169,8 +179,14 @@ if __name__ == '__main__':
                         help="Rescale the metric as the relative (%%) change from each source domain's self-pair value.")
     parser.add_argument('--mask_domains', type=int, nargs='*', default=[],
                         help="Domain indices to exclude from both src and tgt.")
+    parser.add_argument('--outlier_domains', type=int, nargs='*', default=[],
+                        help="Domain indices considered outliers (e.g. for geoyfcc_text, Panama=17). "
+                             "Excluded from both src and tgt, so they're left out of the plot and of "
+                             "stats like Spearman's rho, the regression fit, and R^2.")
     parser.add_argument('--title', type=str, default=None,
                         help="Override the auto-generated plot title.")
+    parser.add_argument('--x_title', type=str, default=None,
+                        help="Override the auto-generated x-axis label, e.g. an embedding type name like 'BERT'.")
     parser.add_argument('--figsize', type=float, nargs=2, default=(10, 10),
                         help="Figure size as 'width height'.")
 

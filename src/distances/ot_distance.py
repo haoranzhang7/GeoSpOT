@@ -3,48 +3,64 @@
 Compute OT distances from source domain to K target domains (K=1,2,3)
 """
 
-import os
-import json
-import time
-import gc
-import copy
-import argparse
+import os, json, time, gc, copy, argparse, sys
 from pathlib import Path
 from itertools import combinations
-import sys
-from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
 import torch
+import ot
+from tqdm import tqdm
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from datasets.geoyfcc.geoyfcc import GeoYFCCText
+from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matrix, haversine_distance,
+                                        cost_constants_cache_path, load_cost_constants, compute_and_cache_cost_constants)
+from src.distances.combined_ot_distance import compute_combined_distance
+from src.distances.utils import save_ot_distance, load_ot_distance, get_ot_distance_cache_path, uniform_weights, solve_ot
 
-from compute_distances.ot_distance import (
-    compute_ot_distance,
-    compute_combined_ot_distance,
-    cosine_distance_minmax,
-    haversine_distance,
-)
-from compute_distances.utils import (
-    save_ot_distance,
-    load_ot_distance,
-    get_ot_distance_cache_path,
-)
+
+def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> float:
+    cost_matrix = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
+    a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
+    b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
+    return solve_ot(a, b, cost_matrix, ot_args)
+
+
+def compute_ot_coupling(src_embeddings, tgt_embeddings, ot_args):
+    cost_matrix = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
+    a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
+    b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
+
+    if ot_args.method == "sinkhorn":
+        return ot.sinkhorn(a, b, cost_matrix, reg=ot_args.reg_e, numItermax=ot_args.max_iter, verbose=True)
+    if ot_args.method == "emd":
+        return ot.emd(a, b, cost_matrix, verbose=True)
+    raise ValueError(f"Unsupported method: {ot_args.method}")
+
+
+def combine_domain_embeddings(embeddings_dict, domain_indices):
+    if isinstance(domain_indices, int):
+        domain_indices = [domain_indices]
+    return torch.cat([embeddings_dict[i] for i in domain_indices], dim=0)
+
+
+def compute_ot_distance_with_unions(embeddings_dict, src_domains, tgt_domains, ot_args) -> float:
+    src = combine_domain_embeddings(embeddings_dict, src_domains)
+    tgt = combine_domain_embeddings(embeddings_dict, tgt_domains)
+    return compute_ot_distance(src, tgt, ot_args)
+
 
 device = dataset = domains = None
 _coordinate_cache = {}
 
 def initialize(args):
-    """Initialize global dataset/device state from CLI args."""
     global device, dataset, domains, _coordinate_cache
-
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-
     dataset = GeoYFCCText(root=f"{args.data_root}/{args.dataset_name}", split='train')
     domains = np.array(list(dataset.df["country_id"]))
     _coordinate_cache = {}
@@ -103,18 +119,13 @@ def get_cost_constants(embedding_type, args):
     if embedding_type == "geodesic":
         return get_geodesic_cost_constants(args)
 
-    path = Path(args.data_root) / args.dataset_name / f"{embedding_type}_cost_matrix_data.json"
-    if path.exists():
-        with open(path, 'r') as f:
-            data = json.load(f)
-            return data['cost_max'], data['cost_min']
+    cached = load_cost_constants(args.data_root, args.dataset_name, embedding_type, args.metric)
+    if cached is not None:
+        return cached
 
     embeddings = torch.load(get_embedding_path(args, embedding_type), map_location="cuda")
-    min_val, max_val = cosine_distance_minmax(embeddings, embeddings)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump({'cost_min': float(min_val), 'cost_max': float(max_val)}, f, indent=2)
+    max_val, min_val = compute_and_cache_cost_constants(args.data_root, args.dataset_name, embedding_type,
+                                                          args.metric, embeddings)
 
     del embeddings
     torch.cuda.empty_cache()
@@ -125,7 +136,7 @@ def get_cost_constants(embedding_type, args):
 def get_geodesic_cost_constants(args, batch_size=20000, force_recompute=False):
     """Get or compute min/max cost constants for geodesic distance"""
     print("Getting Geodesic Cost Constants...")
-    path = Path(args.data_root) / args.dataset_name / "geodesic_cost_matrix_data.json"
+    path = cost_constants_cache_path(args.data_root, args.dataset_name, "geodesic", "geodesic")
 
     if path.exists() and not force_recompute:
         with open(path, 'r') as f:
@@ -144,9 +155,7 @@ def get_geodesic_cost_constants(args, batch_size=20000, force_recompute=False):
     n = len(all_coords_tensor)
 
     print(f"Computing geodesic distances for {n} coordinates (batched)...")
-
-    global_min = float("inf")
-    global_max = float("-inf")
+    global_min, global_max = float("inf"), float("-inf")
 
     with torch.no_grad():
         for i in tqdm(range(0, n, batch_size), desc="Computing geodesic batches (outer)", leave=True):
@@ -215,30 +224,8 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_d
         ot_args.max_constant, ot_args.min_constant = max_const, min_const
         distance = compute_ot_distance(src_data, tgt_coords, ot_args)
     elif "+" in embedding_type:
-        emb_type_1, emb_type_2 = embedding_type.split("+")
-
-        tgt_emb_1 = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx, emb_type_1)
-                                for idx in tgt_domain_indices], dim=0)
-        tgt_emb_2 = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx, emb_type_2)
-                                for idx in tgt_domain_indices], dim=0)
-
-        cost_args_1 = copy.copy(args)
-        cost_args_1.metric = "geodesic" if emb_type_1 == "geodesic" else args.metric
-        cost_args_1.max_constant, cost_args_1.min_constant = max_const[emb_type_1], min_const[emb_type_1]
-
-        cost_args_2 = copy.copy(args)
-        cost_args_2.metric = "geodesic" if emb_type_2 == "geodesic" else args.metric
-        cost_args_2.max_constant, cost_args_2.min_constant = max_const[emb_type_2], min_const[emb_type_2]
-
-        ot_args.lambda_param = lambda_param if lambda_param is not None else 0.5
-        ot_args.normalize_after = args.normalize_after
-
-        distance = compute_combined_ot_distance(
-            src_data[emb_type_1], src_data[emb_type_2],
-            tgt_emb_1, tgt_emb_2,
-            cost_args_1, cost_args_2, ot_args
-        )
-        print(f"Computed combined distance: {distance}", flush=True)
+        distance = compute_combined_distance(args, src_data, tgt_domain_indices, embeddings_or_dataset, domains,
+                                              embedding_type, max_const, min_const, ot_args, lambda_param)
     else:
         tgt_embeddings = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx)
                                      for idx in tgt_domain_indices], dim=0)

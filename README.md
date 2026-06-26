@@ -80,7 +80,7 @@ python src/data/embeddings/embeddings.py \
 - **OT distances between domains**: Specify source domain and will compute OT distances to all domains (need to compute embeddings first)
 
 ```bash
-python src/data/distances/ot_distance.py \
+python src/distances/ot_distance.py \
   --embedding-type bert \
   --source-domain-idx 5 \
   --reg-e 0.01 \
