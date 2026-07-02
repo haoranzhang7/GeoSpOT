@@ -11,25 +11,41 @@ from scipy.stats import spearmanr
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# If plot font needs to be Times New Roman
-# matplotlib.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['font.family'] = 'Times New Roman'
 
-DISTANCE_COLOR_MAP = {
-    'ot': 'cornflowerblue',
-    'mmd': 'mediumorchid',
-    'fid': 'orange',
-    'cosine': 'green',
-    'arc': 'darkorange',
+KNOWN_DISTANCE_TYPES = ['ot', 'mmd', 'fid', 'cosine', 'arc']
+
+EMBEDDING_LABELS = {
+    'bert': 'BERT Embeddings',
+    'geoclip': 'GeoCLIP Embeddings',
+    'satclip': 'SatCLIP Embeddings',
+    'geodesic': 'Geodesic',
+}
+
+EMBEDDING_COLORS = {
+    'bert': 'mediumorchid',
+    'geoclip': 'cornflowerblue',
+    'satclip': 'green',
+    'geodesic': 'darkorange',
 }
 
 
 def infer_distance_type(distance_file):
     """Guess a distance type label (ot/mmd/fid/cosine/arc) from the filename."""
     stem = os.path.basename(distance_file).lower()
-    for known_type in DISTANCE_COLOR_MAP:
+    for known_type in KNOWN_DISTANCE_TYPES:
         if known_type in stem:
             return known_type
     return os.path.splitext(os.path.basename(distance_file))[0]
+
+
+def infer_embedding_type(distance_file):
+    """Guess the embedding type (bert/geoclip/satclip/geodesic) from the filename."""
+    stem = os.path.basename(distance_file).lower()
+    for known_type in EMBEDDING_LABELS:
+        if known_type in stem:
+            return known_type
+    return None
 
 
 def load_distance_matrix(distance_file, distance_type):
@@ -80,7 +96,7 @@ def exclude_domains(combined_df, domain_indices):
     ]
 
 
-def plot_trends(df, filename, title_name, x_title, y_title, color, figsize=(10, 10)):
+def plot_trends(df, filename, x_title, y_title, color, figsize=(10, 10)):
     scatter_x = 'dist_value'
     scatter_y = 'acc_value'
     scatter_color = tuple(0.7 * c for c in to_rgb(color))
@@ -104,8 +120,6 @@ def plot_trends(df, filename, title_name, x_title, y_title, color, figsize=(10, 
     ax.set_xlabel(f"{x_title}", fontsize=16)
     ax.set_ylabel(f"{y_title}", fontsize=16)
     ax.legend(fontsize=16)
-
-    ax.set_title(title_name, fontsize=14)
 
     plt.tight_layout()
     fig.savefig(filename, bbox_inches="tight", dpi=300)
@@ -131,21 +145,11 @@ def main(args):
     if combined_df.empty:
         raise ValueError("No domain pairs left to plot after filtering - check distance_file/results_file overlap and filters.")
 
-    color = DISTANCE_COLOR_MAP.get(distance_type.lower(), 'steelblue')
+    embedding_type = args.embedding_type or infer_embedding_type(args.distance_file)
+    color = EMBEDDING_COLORS.get(embedding_type, 'steelblue')
 
-    x_title = args.x_title or f"Domain Distance ({distance_type})"
+    x_title = args.x_title or EMBEDDING_LABELS.get(embedding_type, f"Domain Distance ({distance_type})")
     y_title = "Relative Change in Test Accuracy (%)" if args.rescale_acc else args.metric.replace('_', ' ').title()
-
-    if args.title:
-        title_name = args.title
-    else:
-        title_name = "Domain Adaptation Performance vs. Domain Distance Trend Plot\n" + \
-                        f"Distance Type: {distance_type.upper()},\n" + \
-                        f"Metric: {args.metric}"
-        if args.mask_domains:
-            title_name += f"\nExcluded domains: {', '.join(str(i) for i in args.mask_domains)}"
-        if args.outlier_domains:
-            title_name += f"\nExcluded outliers: {', '.join(str(i) for i in args.outlier_domains)}"
 
     include_self_pair_str = "inc-self" if args.include_self_pair else "exc-self"
     rescale_acc_str = "rescale_acc" if args.rescale_acc else "raw_acc"
@@ -155,7 +159,7 @@ def main(args):
     plot_filename = f"trend_{distance_type}_{args.metric}_{include_self_pair_str}_{rescale_acc_str}{mask_domain_str}{outlier_str}.png"
     plot_filepath = os.path.join(args.output_dir, plot_filename)
 
-    plot_trends(combined_df, plot_filepath, title_name, x_title, y_title, color, figsize=tuple(args.figsize))
+    plot_trends(combined_df, plot_filepath, x_title, y_title, color, figsize=tuple(args.figsize))
     print(f"Saved plot to {plot_filepath}")
 
 
@@ -183,10 +187,11 @@ if __name__ == '__main__':
                         help="Domain indices considered outliers (e.g. for geoyfcc_text, Panama=17). "
                              "Excluded from both src and tgt, so they're left out of the plot and of "
                              "stats like Spearman's rho, the regression fit, and R^2.")
-    parser.add_argument('--title', type=str, default=None,
-                        help="Override the auto-generated plot title.")
+    parser.add_argument('--embedding_type', type=str, default=None, choices=list(EMBEDDING_LABELS),
+                        help="Embedding type used to color the plot and label the x-axis "
+                             "('bert', 'geoclip', 'satclip', or 'geodesic'). Inferred from the filename if omitted.")
     parser.add_argument('--x_title', type=str, default=None,
-                        help="Override the auto-generated x-axis label, e.g. an embedding type name like 'BERT'.")
+                        help="Override the auto-generated x-axis label, e.g. an embedding type name like 'BERT Embeddings'.")
     parser.add_argument('--figsize', type=float, nargs=2, default=(10, 10),
                         help="Figure size as 'width height'.")
 

@@ -15,19 +15,8 @@ NPZ_EMBEDDING_FILES = {
 }
 
 
-def load_embeddings_and_domains(dataset_name, embedding_type):
-    if embedding_type in NPZ_EMBEDDING_FILES:
-        npz_path = EMBEDDINGS_ROOT / f"{dataset_name}_train_{NPZ_EMBEDDING_FILES[embedding_type]}.npz"
-        data = np.load(npz_path)
-        embeddings = torch.tensor(data["embeddings"], dtype=torch.float32)
-        domains = data["domains"]
-        return embeddings, domains
-
-    emb_path = DATA_ROOT / dataset_name / "embeddings" / f"{embedding_type}.pt"
-    if not emb_path.exists():
-        emb_path = DATA_ROOT / dataset_name / f"{dataset_name}_{embedding_type}_embeddings.pt"
-    embeddings = torch.load(emb_path, map_location="cpu")
-
+def _load_dataset_and_domains(dataset_name):
+    """Load the dataset object (with its metadata df) and the per-row domain array."""
     if dataset_name == "geoyfcc_text":
         from datasets.geoyfcc.geoyfcc import GeoYFCCText
         ds = GeoYFCCText(root=str(DATA_ROOT / dataset_name), split=None)
@@ -43,7 +32,45 @@ def load_embeddings_and_domains(dataset_name, embedding_type):
         domains = np.array(ds.df["domain_idx"])
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
+    return ds, domains
 
+
+_LATLON_COLUMNs = [("lat", "lon"), ("latitude", "longitude")]
+
+
+def load_coordinates_and_domains(dataset_name):
+    """Load lat/lon coordinates as [N,2] 'embeddings' (for the geodesic metric) and per-sample domains.
+    Rows with missing lat/lon are dropped from both arrays so they stay aligned."""
+    ds, domains = _load_dataset_and_domains(dataset_name)
+    lat_col, lon_col = next(
+        (cols for cols in _LATLON_COLUMNs if set(cols).issubset(ds.df.columns)), (None, None)
+    )
+    if lat_col is None:
+        raise ValueError(f"Dataset {dataset_name} has no lat/lon columns; geodesic distance is unsupported.")
+
+    valid = ds.df[[lat_col, lon_col]].notna().all(axis=1).to_numpy()
+    coords = torch.tensor(ds.df.loc[valid, [lat_col, lon_col]].to_numpy(), dtype=torch.float32)
+    domains = domains[valid]
+    return coords, domains
+
+
+def load_embeddings_and_domains(dataset_name, embedding_type):
+    if embedding_type == "geodesic":
+        return load_coordinates_and_domains(dataset_name)
+
+    if embedding_type in NPZ_EMBEDDING_FILES:
+        npz_path = EMBEDDINGS_ROOT / f"{dataset_name}_train_{NPZ_EMBEDDING_FILES[embedding_type]}.npz"
+        data = np.load(npz_path)
+        embeddings = torch.tensor(data["embeddings"], dtype=torch.float32)
+        domains = data["domains"]
+        return embeddings, domains
+
+    emb_path = DATA_ROOT / dataset_name / "embeddings" / f"{embedding_type}.pt"
+    if not emb_path.exists():
+        emb_path = DATA_ROOT / dataset_name / f"{dataset_name}_{embedding_type}_embeddings.pt"
+    embeddings = torch.load(emb_path, map_location="cpu")
+
+    _, domains = _load_dataset_and_domains(dataset_name)
     return embeddings, domains
 
 
