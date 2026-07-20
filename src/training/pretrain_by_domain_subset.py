@@ -247,6 +247,9 @@ def main(args):
     if args.model_data_seed is None:
         raise ValueError("model_data_seed is required: provide -s/--model_data_seed")
 
+    if args.tgt_domain is not None and args.tgt_domain != "all":
+        args.tgt_domain = int(args.tgt_domain)
+
     model_entry = {
         'LEARNING_RATE': args.lr, 'DEFAULT_LEARNING_RATE': args.lr,
         'NUM_EPOCHS': args.num_epochs,
@@ -280,7 +283,7 @@ def main(args):
             'ot_distance_dir': args.ot_distance_dir,
             'source_domain_idx': args.tgt_domain,
             'embedding_type': args.ot_embedding_type,
-            'method': args.ot_method or 'sinkhorn',
+            'method': args.ot_method or 'sinkhorn_log',
             'reg': args.ot_reg or '0.01',
             'iter': args.ot_iter or '1000',
             'metric': args.ot_metric or 'cosine',
@@ -334,7 +337,9 @@ if __name__ == '__main__':
     parser.add_argument('--exclude_domains', type=int, default=None,
                         help='Domains to exclude from candidate domains')
     # OT selection parameters
-    parser.add_argument('--tgt_domain', type=int, default=None, help='Target domain for evaluation (e.g., OT source domain)')
+    parser.add_argument('--tgt_domain', type=str, default=None,
+                        help="Target domain for evaluation (e.g., OT source domain). Pass an int, or 'all' to "
+                             "target the pooled distribution across every domain.")
     parser.add_argument('--ot_embedding_type', type=str, default=None, help='OT embedding type (e.g., geoclip)')
     parser.add_argument('--ot_method', type=str, default=None, help='OT method (e.g., sinkhorn)')
     parser.add_argument('--ot_reg', type=str, default=None, help='OT regularization (e.g., 0.01)')

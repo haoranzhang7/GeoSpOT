@@ -2,7 +2,6 @@ from typing import Tuple, List, Sequence, Optional, Dict, Any
 import numpy as np
 import pandas as pd
 import os
-import csv
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -22,9 +21,10 @@ def _select_best_ot_combination(
     num_domains: int,
 ) -> List[int]:
     """
-    Read the OT distances CSV specified by ot_params and return the K-target domain
-    combination (as a list of ints) that yields the minimum distance for the given
-    source domain, subject to filters (candidate pool, exclusions, exact K).
+    Return the K-target domain combination with minimum OT distance from the source domain,
+    subject to filters (candidate pool, exclusions, exact K). K=1 reads the shared src x tgt
+    distance matrix CSV; K>1 reads the shared long-format CSV. Both are written by
+    src/distances/ot_distance.py, one file per config across every source domain.
 
     Required ot_params keys:
       - ot_distance_dir, source_domain_idx, embedding_type, method, reg, iter, metric, norm
@@ -32,8 +32,7 @@ def _select_best_ot_combination(
     ot_dir = ot_params.get('ot_distance_dir')
     source_domain_idx = ot_params.get('source_domain_idx')
     embedding_type = ot_params.get('embedding_type')
-    # Defaults for convenience
-    ot_method = ot_params.get('method') or 'sinkhorn'
+    ot_method = ot_params.get('method') or 'sinkhorn_log'
     reg = ot_params.get('reg') or '0.01'
     iters = ot_params.get('iter') or '1000'
     metric = ot_params.get('metric') or 'cosine'
@@ -42,54 +41,32 @@ def _select_best_ot_combination(
     if None in [ot_dir, source_domain_idx, embedding_type, num_domains]:
         raise ValueError("Missing required OT parameters: ot_distance_dir, source_domain_idx, embedding_type, method, reg, iter, metric, norm, num_domains")
 
-    filename = f"distances_source{source_domain_idx}_k{num_domains}_{embedding_type}_greedy_method_{ot_method}_reg_{reg}_iter_{iters}_metric_{metric}_norm_{norm}.csv"
-    csv_path = os.path.join(ot_dir, filename)
+    num_domains = int(num_domains)
+    method_suffix = "greedy" if num_domains > 1 else "all_combinations"
+    config_suffix = f"{method_suffix}_method_{ot_method}_reg_{reg}_iter_{iters}_metric_{metric}_norm_{norm}"
+    prefix = f"ot_distance_matrix_{embedding_type}" if num_domains == 1 else f"distances_k{num_domains}_{embedding_type}"
+    csv_path = os.path.join(ot_dir, f"{prefix}_{config_suffix}.csv")
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"OT distances file not found: {csv_path}")
 
-    best_row = None
-    best_distance = None
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            # Validate source domain
-            try:
-                src_idx = int(row.get('src_domain_idx'))
-                if src_idx != int(source_domain_idx):
-                    continue
-            except (ValueError, TypeError):
-                continue
-            
-            # Parse target domains
-            combo = row.get('tgt_domains_combined', '')
-            if not combo:
-                continue
-            try:
-                tgt_list = [int(tok) for tok in combo.split('+') if tok]
-            except ValueError:
-                continue
-            
-            # Apply filters
-            if (len(tgt_list) != int(num_domains) or
-                any(t in exclude_domains_list for t in tgt_list) or
-                any(t not in candidate_pool for t in tgt_list)):
-                continue
-            
-            # Get distance
-            try:
-                dist = float(row.get('distance'))
-            except (ValueError, TypeError):
-                continue
-            
-            # Update best if better
-            if best_distance is None or dist < best_distance:
-                best_distance = dist
-                best_row = tgt_list
+    if num_domains == 1:
+        row = pd.read_csv(csv_path, index_col=0)
+        row.index = row.index.astype(str)
+        row = row.loc[str(source_domain_idx)]
+        valid = [c for c in row.index if int(c) in candidate_pool and int(c) not in exclude_domains_list and pd.notna(row[c])]
+        if not valid:
+            raise ValueError(f"No valid OT candidate domain found in {csv_path} after applying filters")
+        return [int(min(valid, key=lambda c: row[c]))]
 
-    if best_row is None:
-        from IPython import embed; embed()
+    df = pd.read_csv(csv_path)
+    df = df[df["src_domain_idx"].astype(str) == str(source_domain_idx)]
+    tgt_lists = df["tgt_domains_combined"].apply(lambda s: [int(t) for t in str(s).split('+') if t])
+    valid = tgt_lists.apply(lambda tl: len(tl) == num_domains and not any(t in exclude_domains_list for t in tl)
+                             and all(t in candidate_pool for t in tl))
+    df, tgt_lists = df[valid], tgt_lists[valid]
+    if df.empty:
         raise ValueError(f"No valid OT candidate combination found in {csv_path} after applying filters")
-    return best_row
+    return tgt_lists.loc[df["distance"].idxmin()]
 
 def choose_candidate_domains(
     all_domains: Sequence[int],

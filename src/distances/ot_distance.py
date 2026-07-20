@@ -1,7 +1,5 @@
 #!/usr/bin/env python
-"""
-Compute OT distances from source domain to K target domains (K=1,2,3)
-"""
+"""Compute OT distances from a source domain to K target domains."""
 
 import os, json, time, gc, copy, argparse, sys
 from pathlib import Path
@@ -10,189 +8,133 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 import torch
-import ot
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from datasets.geoyfcc.geoyfcc import GeoYFCCText
 from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matrix, haversine_distance,
                                         cost_constants_cache_path, load_cost_constants, compute_and_cache_cost_constants)
 from src.distances.combined_ot_distance import compute_combined_distance
-from src.distances.utils import save_ot_distance, load_ot_distance, get_ot_distance_cache_path, uniform_weights, solve_ot
+from src.distances.utils import (save_ot_distance, load_ot_distance, get_ot_distance_cache_path, uniform_weights,
+                                  solve_ot, domain_slice, load_embeddings_and_domains, load_coordinates_and_domains)
+
+NEEDS_GLOBAL_CONSTANTS = ("max", "minmax")
 
 
 def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> float:
-    cost_matrix = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
+    cost_ab = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
     a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
     b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
-    return solve_ot(a, b, cost_matrix, ot_args)
+    ot_ab = solve_ot(a, b, cost_ab, ot_args)
 
+    if not ot_args.debiased:
+        return ot_ab
 
-def compute_ot_coupling(src_embeddings, tgt_embeddings, ot_args):
-    cost_matrix = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
-    a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
-    b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
+    # Sinkhorn divergence: S_eps(a,b) = OT_eps(a,b) - 0.5*OT_eps(a,a) - 0.5*OT_eps(b,b),
+    # which corrects for the regularization-induced bias of entropic OT (S_eps(a,a) = 0).
+    # Caveat: with normalize_cost="max_per_domain" each term is scaled by its own local max,
+    # so the bias cancellation is only approximate (exact under "max"/"minmax").
+    cost_aa = normalize_cost_matrix(compute_cost_matrix(src_embeddings, src_embeddings, ot_args.metric), ot_args)
+    cost_bb = normalize_cost_matrix(compute_cost_matrix(tgt_embeddings, tgt_embeddings, ot_args.metric), ot_args)
+    ot_aa = solve_ot(a, a, cost_aa, ot_args)
+    ot_bb = solve_ot(b, b, cost_bb, ot_args)
+    return ot_ab - 0.5 * (ot_aa + ot_bb)
 
-    if ot_args.method == "sinkhorn":
-        return ot.sinkhorn(a, b, cost_matrix, reg=ot_args.reg_e, numItermax=ot_args.max_iter, verbose=True)
-    if ot_args.method == "emd":
-        return ot.emd(a, b, cost_matrix, verbose=True)
-    raise ValueError(f"Unsupported method: {ot_args.method}")
-
-
-def combine_domain_embeddings(embeddings_dict, domain_indices):
-    if isinstance(domain_indices, int):
-        domain_indices = [domain_indices]
-    return torch.cat([embeddings_dict[i] for i in domain_indices], dim=0)
-
-
-def compute_ot_distance_with_unions(embeddings_dict, src_domains, tgt_domains, ot_args) -> float:
-    src = combine_domain_embeddings(embeddings_dict, src_domains)
-    tgt = combine_domain_embeddings(embeddings_dict, tgt_domains)
-    return compute_ot_distance(src, tgt, ot_args)
-
-
-device = dataset = domains = None
-_coordinate_cache = {}
-
-def initialize(args):
-    global device, dataset, domains, _coordinate_cache
-    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    dataset = GeoYFCCText(root=f"{args.data_root}/{args.dataset_name}", split='train')
-    domains = np.array(list(dataset.df["country_id"]))
-    _coordinate_cache = {}
 
 def load_country_mapping(args) -> dict:
     path = Path(args.data_root) / "geoyfcc" / "country_mapping.json"
     if not path.exists():
-        print(f"Warning: Country mapping file not found at {path}")
         return {}
-    try:
-        with open(path, 'r') as f:
-            return {int(k): v for k, v in json.load(f).items()}
-    except Exception as e:
-        print(f"Warning: Could not load country mapping from {path}: {e}")
-        return {}
-
-def get_embedding_path(args, embedding_type) -> Path:
-    return Path(args.data_root) / args.dataset_name / "embeddings" / f"{embedding_type}.pt"
+    with open(path, 'r') as f:
+        return {int(k): v for k, v in json.load(f).items()}
 
 def get_result_dir(args) -> Path:
     return Path(args.data_root) / args.dataset_name / "distances" / "ot_distance"
 
-def extract_domain_embeddings(embeddings, domains_array, domain_idx, embedding_type=None):
-    """Extract embeddings for a specific domain"""
-    if isinstance(embeddings, dict):
-        assert embedding_type is not None
-        if embedding_type == "geodesic":
-            return extract_domain_coordinates(dataset, domains_array, domain_idx)
-        embeddings = embeddings[embedding_type]
-    return embeddings[domains_array == domain_idx]
-
-def extract_domain_coordinates(dataset, domains_array, domain_idx):
-    """Extract lat/lon coordinates for a specific domain with caching and GPU acceleration"""
-    if domain_idx in _coordinate_cache:
-        return _coordinate_cache[domain_idx]
-
-    coords = dataset.df[domains_array == domain_idx][['lat', 'lon']].dropna()
-    if len(coords) == 0:
-        print(f"Warning: No valid coordinates found for domain {domain_idx}")
-        coords_tensor = torch.tensor([], dtype=torch.float32, device=device)
-    else:
-        coords_tensor = torch.tensor(coords.values, dtype=torch.float32, device=device)
-        print(f"  Domain {domain_idx}: {len(coords_tensor)} samples with coordinates")
-
-    _coordinate_cache[domain_idx] = coords_tensor
-    return coords_tensor
-
-def clear_coordinate_cache():
-    """Clear the coordinate cache to free GPU memory"""
-    _coordinate_cache.clear()
-    torch.cuda.empty_cache()
-    print("Coordinate cache cleared")
-
-def get_cost_constants(embedding_type, args):
-    """Get or compute min/max cost constants for normalization"""
+def get_cost_constants(embedding_type, args, tensor):
     if embedding_type == "geodesic":
-        return get_geodesic_cost_constants(args)
-
+        return get_geodesic_cost_constants(args, tensor)
     cached = load_cost_constants(args.data_root, args.dataset_name, embedding_type, args.metric)
     if cached is not None:
         return cached
+    return compute_and_cache_cost_constants(args.data_root, args.dataset_name, embedding_type, args.metric, tensor)
 
-    embeddings = torch.load(get_embedding_path(args, embedding_type), map_location="cuda")
-    max_val, min_val = compute_and_cache_cost_constants(args.data_root, args.dataset_name, embedding_type,
-                                                          args.metric, embeddings)
-
-    del embeddings
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    return max_val, min_val
-
-def get_geodesic_cost_constants(args, batch_size=20000, force_recompute=False):
-    """Get or compute min/max cost constants for geodesic distance"""
-    print("Getting Geodesic Cost Constants...")
+def get_geodesic_cost_constants(args, coords_tensor, batch_size=20000, force_recompute=False):
     path = cost_constants_cache_path(args.data_root, args.dataset_name, "geodesic", "geodesic")
-
     if path.exists() and not force_recompute:
         with open(path, 'r') as f:
             data = json.load(f)
         return data['cost_max'], data['cost_min']
 
-    print("Computing geodesic cost constants from lat/lon coordinates...")
-    all_coords = [c for idx in range(args.total_domains)
-                  if len(c := extract_domain_coordinates(dataset, domains, idx)) > 0]
+    device = coords_tensor.device
+    n = len(coords_tensor)
+    if n == 0:
+        raise ValueError("No valid coordinates found for any domain")
 
-    if not all_coords:
-        raise ValueError("Warning: No valid coordinates found for any domain")
-
-    all_coords_tensor = torch.cat(all_coords, dim=0)
-    device = all_coords_tensor.device
-    n = len(all_coords_tensor)
-
-    print(f"Computing geodesic distances for {n} coordinates (batched)...")
     global_min, global_max = float("inf"), float("-inf")
-
     with torch.no_grad():
-        for i in tqdm(range(0, n, batch_size), desc="Computing geodesic batches (outer)", leave=True):
+        for i in tqdm(range(0, n, batch_size), desc="Geodesic cost constants"):
             end_i = min(i + batch_size, n)
-            batch_i = all_coords_tensor[i:end_i]
-
-            for j in tqdm(range(0, n, batch_size), desc=f"  Inner loop for batch {i//batch_size+1}", leave=False):
+            batch_i = coords_tensor[i:end_i]
+            for j in range(0, n, batch_size):
                 end_j = min(j + batch_size, n)
-                dists = haversine_distance(batch_i, all_coords_tensor[j:end_j])
-
+                dists = haversine_distance(batch_i, coords_tensor[j:end_j])
                 if i == j:
                     mask = ~torch.eye(end_i - i, dtype=torch.bool, device=device)
                     dists = dists[mask]
-
                 global_min = min(global_min, dists.min().item())
                 global_max = max(global_max, dists.max().item())
-
                 del dists
                 torch.cuda.empty_cache()
-
-    print(f"Geodesic cost constants: min={global_min:.2f} km, max={global_max:.2f} km")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w') as f:
         json.dump({'cost_min': global_min, 'cost_max': global_max}, f, indent=2)
-
-    del all_coords_tensor
-    torch.cuda.empty_cache()
-    gc.collect()
-
     return global_max, global_min
 
-def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_dataset, domains,
+def load_type_data(args, device, embedding_type):
+    if embedding_type == "geodesic":
+        tensor, doms = load_coordinates_and_domains(args.dataset_name)
+    else:
+        tensor, doms = load_embeddings_and_domains(args.dataset_name, embedding_type)
+    return tensor.to(device), doms
+
+def load_source_data(args, device, source_domain_idx, embedding_type):
+    """Load target-side data, source-domain slices, and cost-normalization constants for each embedding type."""
+    types = embedding_type.split("+")
+    needs_constants = args.normalize_cost in NEEDS_GLOBAL_CONSTANTS
+    data_source, domains_source, max_const, min_const, src_data = {}, {}, {}, {}, {}
+
+    for t in types:
+        tensor, doms = load_type_data(args, device, t)
+        data_source[t], domains_source[t] = tensor, doms
+        max_const[t], min_const[t] = get_cost_constants(t, args, tensor) if needs_constants else (None, None)
+        src_data[t] = domain_slice(tensor, doms, source_domain_idx)
+        if len(src_data[t]) == 0:
+            raise ValueError(f"No data found for source domain {source_domain_idx} in embedding type {t}")
+        if source_domain_idx == "all" and src_data[t].shape[0] > args.source_sample_cap:
+            # Pooling every domain's samples (~10^5-10^6 rows) makes the dense OT
+            # cost matrix too large to fit on GPU (a single domain is ~10^4 rows).
+            # Subsample down to source_sample_cap, deterministically, to keep the
+            # problem the same order of magnitude as a single-domain OT run.
+            n_before = src_data[t].shape[0]
+            gen = torch.Generator(device=src_data[t].device).manual_seed(args.source_sample_seed)
+            keep = torch.randperm(n_before, generator=gen, device=src_data[t].device)[:args.source_sample_cap]
+            src_data[t] = src_data[t][keep]
+            print(f"[INFO] source-domain-idx=all, embedding_type={t}: subsampled pooled source "
+                  f"from {n_before} to {src_data[t].shape[0]} points (source_sample_cap="
+                  f"{args.source_sample_cap}, seed={args.source_sample_seed}) to keep the OT cost "
+                  f"matrix tractable.")
+
+    if len(types) == 1:
+        t = types[0]
+        return src_data[t], data_source[t], domains_source[t], max_const[t], min_const[t]
+    return src_data, data_source, domains_source, max_const, min_const
+
+def compute_or_load_distance(args, src_data, tgt_domain_indices, data_source, domains_source,
                               embedding_type, max_const, min_const, source_domain_idx,
                               include_greedy_sequential_str=False, lambda_param=None):
-    """Compute or load cached OT distance"""
-
     result_dir = get_result_dir(args)
     lambda_for_cache = lambda_param if "+" in embedding_type else None
 
@@ -211,26 +153,17 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_d
 
     if os.path.exists(cache_path) and not args.force_recompute:
         cache_data = load_ot_distance(cache_path)
-        print(f"Loaded from cache {cache_path}", flush=True)
         if cache_data:
             return cache_data['distance'], True
-    elif args.force_recompute and os.path.exists(cache_path):
-        print(f"Force recompute enabled - ignoring cache {cache_path}", flush=True)
 
     t0 = time.time()
-    if embedding_type == "geodesic":
-        tgt_coords = torch.cat([extract_domain_coordinates(embeddings_or_dataset, domains, idx)
-                                 for idx in tgt_domain_indices], dim=0)
-        ot_args.max_constant, ot_args.min_constant = max_const, min_const
-        distance = compute_ot_distance(src_data, tgt_coords, ot_args)
-    elif "+" in embedding_type:
-        distance = compute_combined_distance(args, src_data, tgt_domain_indices, embeddings_or_dataset, domains,
+    if "+" in embedding_type:
+        distance = compute_combined_distance(args, src_data, tgt_domain_indices, data_source, domains_source,
                                               embedding_type, max_const, min_const, ot_args, lambda_param)
     else:
-        tgt_embeddings = torch.cat([extract_domain_embeddings(embeddings_or_dataset, domains, idx)
-                                     for idx in tgt_domain_indices], dim=0)
+        tgt_tensor = torch.cat([domain_slice(data_source, domains_source, idx) for idx in tgt_domain_indices])
         ot_args.max_constant, ot_args.min_constant = max_const, min_const
-        distance = compute_ot_distance(src_data, tgt_embeddings, ot_args)
+        distance = compute_ot_distance(src_data, tgt_tensor, ot_args)
     comp_time = time.time() - t0
 
     metadata = {
@@ -242,6 +175,7 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_d
         'max_iter': args.max_iter,
         'metric': ot_args.metric,
         'normalize_cost': args.normalize_cost,
+        'debiased': args.debiased,
         'computation_time': comp_time,
         'src_shape': list(src_data.shape) if not isinstance(src_data, dict) else {k: list(v.shape) for k, v in src_data.items()},
         'timestamp': time.time()
@@ -252,17 +186,11 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, embeddings_or_d
 
     torch.cuda.empty_cache()
     gc.collect()
-
-    print(f"Distance computed {distance} for {embedding_type} from {source_domain_idx} to {tgt_domain_indices}")
-
     return distance, False
 
-def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_source, domains,
+def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_source, domains_source,
                                     embedding_type, max_const, min_const, k,
                                     source_domain_idx, lambda_param=None):
-    """Greedy sequential OT domain selection: pick the best next target domain at each step."""
-    print(f"\n--- Greedy Sequential Selection for K={k} ---")
-
     country_mapping = load_country_mapping(args)
 
     selected_domains = []
@@ -271,21 +199,15 @@ def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_sour
 
     for step in range(k):
         rows = []
-        print(f"\nStep {step + 1}: Selecting domain {step + 1}/{k}")
-
         best_distance, best_domain = float('inf'), None
 
         for candidate_domain in remaining_domains:
             current_target_domains = selected_domains + [candidate_domain]
-            print(f"  Evaluating: {current_target_domains}")
-
-            distance, from_cache = compute_or_load_distance(
-                args, src_data, current_target_domains, data_source, domains,
+            distance, _ = compute_or_load_distance(
+                args, src_data, current_target_domains, data_source, domains_source,
                 embedding_type, max_const, min_const, source_domain_idx,
                 include_greedy_sequential_str=step > 0, lambda_param=lambda_param
             )
-            print(f"    Distance: {distance:.6f} ({'cached' if from_cache else 'computed'})")
-
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -310,16 +232,10 @@ def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_sour
         remaining_domains.remove(best_domain)
         distances_at_each_step.append(best_distance)
 
-        print(f"  ✓ Selected domain {best_domain} with distance {best_distance:.6f}")
-        print(f"  Selected so far: {selected_domains}")
-
-    print(f"\n→ Final selection: {selected_domains}")
-    print(f"• Distances at each step: {[f'{d:.6f}' for d in distances_at_each_step]}")
-
+    print(f"Greedy selection for source {source_domain_idx}: {selected_domains}")
     return selected_domains, distances_at_each_step
 
 def create_result_record(embedding_type, tgt_domain_indices, distance, source_domain_idx):
-    """Create a result record with proper domain names"""
     record = {
         "embedding_type": embedding_type,
         "src_domain_idx": source_domain_idx,
@@ -332,144 +248,148 @@ def create_result_record(embedding_type, tgt_domain_indices, distance, source_do
     return record
 
 def parse_args():
-    """Parse command-line arguments"""
     parser = argparse.ArgumentParser(description="Compute OT distances for GeoYFCC dataset")
     parser.add_argument("--data-root", type=str, default="./data", help="Root data directory")
     parser.add_argument("--dataset-name", type=str, default="geoyfcc_text", help="Dataset folder name under the data root")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (falls back to cpu if cuda is unavailable)")
     parser.add_argument("--embedding-type", type=str, required=True, help="Embedding type to process, individual (e.g. 'bert') or combined (e.g. 'bert+geoclip')")
-    parser.add_argument("--source-domain-idx", type=int, default=57, help="Source domain index")
+    parser.add_argument("--source-domain-idx", type=str, default="57",
+                         help="Source domain index, or 'all' to pool embeddings across every domain")
+    parser.add_argument("--source-sample-cap", type=int, default=15000,
+                         help="When --source-domain-idx=all, randomly subsample the pooled source "
+                              "distribution down to this many points (keeps the dense OT cost matrix "
+                              "the same order of magnitude as a single-domain source; a single domain "
+                              "here has ~7.6k-15.6k samples). Ignored otherwise.")
+    parser.add_argument("--source-sample-seed", type=int, default=42,
+                         help="Seed for the --source-sample-cap subsampling, for reproducibility.")
     parser.add_argument("--total-domains", type=int, default=62, help="Total number of domains in the dataset")
     parser.add_argument("--k", type=int, default=1, help="Number of target domains K")
     parser.add_argument("--reg-e", type=float, default=0.01, help="Sinkhorn regularization parameter")
     parser.add_argument("--max-iter", type=int, default=1000, help="Maximum solver iterations")
     parser.add_argument("--metric", type=str, default="cosine", help="Distance metric for non-geodesic embeddings")
-    parser.add_argument("--method", type=str, default="sinkhorn", help="OT method: sinkhorn, sinkhorn_log, or emd")
+    parser.add_argument("--method", type=str, default="sinkhorn_log", help="OT method: sinkhorn, sinkhorn_log, or emd")
     parser.add_argument("--normalize-cost", type=str, default="max", help="Cost matrix normalization: none, max, minmax, or max_per_domain")
+    parser.add_argument("--debiased", action="store_true",
+                         help="Compute the debiased Sinkhorn divergence S_eps(a,b) = OT_eps(a,b) - 0.5*OT_eps(a,a) - 0.5*OT_eps(b,b) "
+                              "instead of raw entropic OT_eps(a,b).")
     parser.add_argument("--normalize-after", action="store_true", help="Renormalize the combined cost matrix after weighting (combined embeddings only)")
     parser.add_argument("--lambda", type=float, default=None, dest="lambda_param", help="Lambda weight for combined embeddings (default: 0.5)")
     parser.add_argument("--greedy-sequential", action="store_true", help="Use greedy sequential domain selection instead of all combinations")
     parser.add_argument("--force-recompute", action="store_true", help="Force recomputation even if cached results exist")
     return parser.parse_args()
 
-def main():
-    args = parse_args()
-    initialize(args)
+def run_all_combinations(args, src_data, data_source, domains_source, all_domain_indices, embedding_type,
+                          max_const, min_const, source_domain_idx, k, lambda_param):
+    records = []
+    tgt_combinations = list(combinations(all_domain_indices, k))
+    for tgt_domain_indices in tqdm(tgt_combinations, desc=f"src={source_domain_idx} k={k}"):
+        distance, _ = compute_or_load_distance(
+            args, src_data, list(tgt_domain_indices), data_source, domains_source,
+            embedding_type, max_const, min_const, source_domain_idx,
+            lambda_param=lambda_param
+        )
+        record = create_result_record(embedding_type, tgt_domain_indices, distance, source_domain_idx)
+        record["greedy_sequential"] = False
+        records.append(record)
+    return records
 
-    source_domain_idx = args.source_domain_idx
+def run_greedy_sequential(args, src_data, all_domain_indices, data_source, domains_source, embedding_type,
+                           max_const, min_const, source_domain_idx, k, lambda_param):
+    selected_domains, distances_at_each_step = greedy_sequential_ot_selection(
+        args, src_data, all_domain_indices, data_source, domains_source,
+        embedding_type, max_const, min_const, k, source_domain_idx, lambda_param
+    )
+    records = []
+    for step, distance in enumerate(distances_at_each_step):
+        record = create_result_record(embedding_type, selected_domains[:step + 1], distance, source_domain_idx)
+        record["selection_step"] = step + 1
+        record["greedy_sequential"] = True
+        records.append(record)
+    return records
+
+def save_k1_matrix(records, output_path, source_domain_idx, total_domains):
+    """Merge k=1 results into a single src x tgt distance matrix CSV, shared across every
+    --source-domain-idx run. OT distance is symmetric, so each entry is mirrored into the
+    transposed cell -- except for the pooled "all" source, which gets its own row only (it's
+    never a valid target domain, so there's no matching column to mirror into)."""
+    if output_path.exists():
+        matrix = pd.read_csv(output_path, index_col=0)
+        matrix.index = matrix.index.astype(str)
+        matrix.columns = matrix.columns.astype(str)
+    else:
+        domain_keys = [str(i) for i in range(total_domains)]
+        matrix = pd.DataFrame(np.nan, index=domain_keys, columns=domain_keys, dtype=float)
+
+    src_key = str(source_domain_idx)
+    for record in records:
+        tgt_key = str(record["tgt_domain_1_idx"])
+        matrix.loc[src_key, tgt_key] = record["distance"]
+        if source_domain_idx != "all":
+            matrix.loc[tgt_key, src_key] = record["distance"]
+
+    domain_order = sorted(matrix.columns, key=int)
+    row_order = domain_order + (["all"] if "all" in matrix.index else [])
+    matrix = matrix.reindex(index=row_order, columns=domain_order)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    matrix.to_csv(output_path)
+
+
+def save_long_records(records, output_path, source_domain_idx):
+    """Merge k>1 results into a single long-format CSV shared across every --source-domain-idx
+    run, replacing any existing rows for this source domain (idempotent on re-run)."""
+    new_df = pd.DataFrame(records)
+    if output_path.exists():
+        existing = pd.read_csv(output_path)
+        existing = existing[existing["src_domain_idx"].astype(str) != str(source_domain_idx)]
+        combined = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        combined = new_df
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(output_path, index=False)
+
+
+def save_records(records, result_dir, source_domain_idx, k, total_domains, embedding_type, method_suffix, config_suffix):
+    if k == 1:
+        output_path = result_dir / f"ot_distance_matrix_{embedding_type}_{method_suffix}_{config_suffix}.csv"
+        save_k1_matrix(records, output_path, source_domain_idx, total_domains)
+    else:
+        output_path = result_dir / f"distances_k{k}_{embedding_type}_{method_suffix}_{config_suffix}.csv"
+        save_long_records(records, output_path, source_domain_idx)
+    print(f"Saved K={k} results to {output_path}")
+
+def cleanup_source_data(src_data, data_source):
+    del src_data, data_source
+    torch.cuda.empty_cache()
+    gc.collect()
+
+def main(args):
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+
+    source_domain_idx = args.source_domain_idx if args.source_domain_idx == "all" else int(args.source_domain_idx)
     embedding_type = args.embedding_type
     k = args.k
-    use_greedy_sequential = args.greedy_sequential
-    lambda_param = args.lambda_param
-
-    result_dir = get_result_dir(args)
-
-    print(f"\n{'='*60}")
-    print(f"Processing {embedding_type} embeddings")
-    print(f"Source Domain ID: {source_domain_idx}")
-    print(f"OT Config: method={args.method}, reg_e={args.reg_e}, max_iter={args.max_iter}, "
-          f"metric={args.metric}, normalize_cost={args.normalize_cost}")
-    print(f"Force Recompute: {args.force_recompute}")
-    print(f"K Value: {k}")
-    print(f"Greedy Sequential: {use_greedy_sequential}")
-    print(f"{'='*60}")
-
     all_domain_indices = list(range(args.total_domains))
 
     metric_to_use = "geodesic" if embedding_type == "geodesic" else args.metric
     config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric_to_use}_norm_{args.normalize_cost}"
+    if args.debiased:
+        config_suffix += "_debiased"
 
-    if embedding_type == "geodesic":
-        print("Using lat/lon coordinates for geodesic distance computation")
-        max_const, min_const = get_cost_constants(embedding_type, args)
-        print(f"Cost constants: min={min_const:.6f} km, max={max_const:.6f} km")
+    src_data, data_source, domains_source, max_const, min_const = load_source_data(args, device, source_domain_idx, embedding_type)
 
-        src_data = extract_domain_coordinates(dataset, domains, source_domain_idx)
-        if len(src_data) == 0:
-            print(f"✗ No valid coordinates found for source domain {source_domain_idx}")
-            return
-
-        data_source = dataset
-    elif "+" in embedding_type:
-        src_data, data_source, max_const, min_const = {}, {}, {}, {}
-
-        for emb_type in embedding_type.split("+"):
-            if emb_type == "geodesic":
-                src_data[emb_type] = extract_domain_coordinates(dataset, domains, source_domain_idx)
-            else:
-                embedding_path = get_embedding_path(args, emb_type)
-                if not embedding_path.exists():
-                    print(f"✗ Embedding file not found: {embedding_path}")
-                    return
-                embeddings = torch.load(embedding_path, map_location="cuda")
-                data_source[emb_type] = embeddings
-                src_data[emb_type] = extract_domain_embeddings(embeddings, domains, source_domain_idx)
-            max_const[emb_type], min_const[emb_type] = get_cost_constants(emb_type, args)
+    if args.greedy_sequential:
+        records = run_greedy_sequential(args, src_data, all_domain_indices, data_source, domains_source, embedding_type,
+                                         max_const, min_const, source_domain_idx, k, args.lambda_param)
+        method_suffix = "greedy"
     else:
-        embedding_path = get_embedding_path(args, embedding_type)
-        if not embedding_path.exists():
-            print(f"✗ Embedding file not found: {embedding_path}")
-            return
+        records = run_all_combinations(args, src_data, data_source, domains_source, all_domain_indices, embedding_type,
+                                        max_const, min_const, source_domain_idx, k, args.lambda_param)
+        method_suffix = "all_combinations"
 
-        embeddings = torch.load(embedding_path, map_location="cuda")
-        max_const, min_const = get_cost_constants(embedding_type, args)
-        print(f"Cost constants: min={min_const:.6f}, max={max_const:.6f}")
-
-        src_data = extract_domain_embeddings(embeddings, domains, source_domain_idx)
-        data_source = embeddings
-
-    print(f"\n--- K={k} target domains ---")
-
-    records = []
-
-    if use_greedy_sequential:
-        print("Using greedy sequential domain selection")
-        selected_domains, distances_at_each_step = greedy_sequential_ot_selection(
-            args, src_data, all_domain_indices, data_source, domains,
-            embedding_type, max_const, min_const, k, source_domain_idx, lambda_param
-        )
-
-        for step, distance in enumerate(distances_at_each_step):
-            record = create_result_record(embedding_type, selected_domains[:step + 1], distance, source_domain_idx)
-            record["selection_step"] = step + 1
-            record["greedy_sequential"] = True
-            records.append(record)
-
-        print(f"✓ Greedy sequential selection completed")
-    else:
-        tgt_combinations = list(combinations(all_domain_indices, k))
-        print(f"Computing {len(tgt_combinations)} combinations...")
-
-        for idx, tgt_domain_indices in enumerate(tgt_combinations, 1):
-            distance, from_cache = compute_or_load_distance(
-                args, src_data, list(tgt_domain_indices), data_source, domains,
-                embedding_type, max_const, min_const, source_domain_idx,
-                lambda_param=lambda_param
-            )
-
-            if idx % 100 == 0 or idx == len(tgt_combinations):
-                status = "cached" if from_cache else "computed"
-                print(f"  [{idx}/{len(tgt_combinations)}] {tgt_domain_indices}: {distance:.6f} ({status})")
-
-            record = create_result_record(embedding_type, tgt_domain_indices, distance, source_domain_idx)
-            record["greedy_sequential"] = False
-            records.append(record)
-
-    method_suffix = "greedy" if use_greedy_sequential else "all_combinations"
-    output_path = result_dir / f"distances_source{source_domain_idx}_k{k}_{embedding_type}_{method_suffix}_{config_suffix}.csv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(records).to_csv(output_path, index=False)
-    print(f"✓ Saved K={k} results to {output_path.name}")
-
-    del src_data
-    if embedding_type == "geodesic":
-        clear_coordinate_cache()
-    elif "+" in embedding_type:
-        del data_source, max_const, min_const
-    else:
-        del embeddings, data_source
-    torch.cuda.empty_cache()
-    gc.collect()
+    save_records(records, get_result_dir(args), source_domain_idx, k, args.total_domains, embedding_type, method_suffix, config_suffix)
+    cleanup_source_data(src_data, data_source)
 
 if __name__ == "__main__":
-    main()
+    main(parse_args())

@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pickle
@@ -9,7 +10,9 @@ from geoclip import LocationEncoder
 from huggingface_hub import hf_hub_download
 from .satclip.load import get_satclip
 
-SUPPORTED_EMBEDDING_TYPES = ["geoclip", "satclip_l10", "satclip_l40"]
+SUPPORTED_EMBEDDING_TYPES = ["geoclip", "satclip_l10", "satclip_l40", "alphaearth"]
+
+ALPHAEARTH_BANDS = [f"A{i:02d}" for i in range(64)]
 
 def generate_geoclip_embeddings(lat_lon_list: List[Tuple[float, float]]) -> torch.Tensor:
     """
@@ -61,7 +64,7 @@ def generate_satclip_embeddings(lat_lon_list: List[Tuple[float, float]], satclip
     
     encoder.eval()  # Set to evaluation mode
     
-    # lat_lon_list is [(lat, lon), ...] → we need [(lon, lat), ...]
+    # lat_lon_list is [(lat, lon), ...] but for satclip we need [(lon, lat), ...]
     lon_lat_list = [(lon, lat) for lat, lon in lat_lon_list]
 
     gps_data = torch.tensor(lon_lat_list, dtype=torch.float64, device=device)
@@ -72,7 +75,50 @@ def generate_satclip_embeddings(lat_lon_list: List[Tuple[float, float]], satclip
     return embeddings
 
 
-def generate_location_embeddings(lat_lon_list: List[Tuple[float, float]], 
+def generate_alphaearth_embeddings(lat_lon_list: List[Tuple[float, float]], year: int = 2024,
+                                   scale: int = 10, batch_size: int = 500,
+                                   ee_project: Optional[str] = None) -> torch.Tensor:
+    """
+    Look up AlphaEarth (GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL) embeddings for lat/lon points via Earth Engine.
+    Samples a single fixed year for every point (location-only, like GeoCLIP/SatCLIP).
+    Points with no coverage for that year (e.g. ocean) get a row of NaN.
+    """
+    import ee
+    ee.Initialize(project=ee_project or os.environ.get("EARTHENGINE_PROJECT"))
+
+    embedding_image = ee.ImageCollection("GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL") \
+        .filterDate(f"{year}-01-01", f"{year + 1}-01-01").mosaic()
+
+    embeddings = np.full((len(lat_lon_list), len(ALPHAEARTH_BANDS)), np.nan, dtype=np.float32)
+    for start in range(0, len(lat_lon_list), batch_size):
+        batch = lat_lon_list[start:start + batch_size]
+        print(f"Sampling AlphaEarth embeddings for points {start} to {start + len(batch)}...")
+
+        features = []
+        for i, (lat, lon) in enumerate(batch):
+            point = ee.Geometry.Point(lon, lat)  # lon, then lat
+            feature = ee.Feature(point, {"index": start + i})
+            features.append(feature)
+
+        fc = ee.FeatureCollection(features)
+
+        extracted = embedding_image.reduceRegions(
+            collection=fc,
+            reducer=ee.Reducer.first(),
+            scale=scale,
+            tileScale=4,
+        )
+
+        for f in extracted.getInfo()["features"]:
+            props = f["properties"]
+            values = [props.get(band) for band in ALPHAEARTH_BANDS]
+            if all(v is not None for v in values):
+                embeddings[props["index"]] = values
+
+    return torch.from_numpy(embeddings)
+
+
+def generate_location_embeddings(lat_lon_list: List[Tuple[float, float]],
                                 embedding_type: str) -> torch.Tensor:
     """
     Generate location embeddings using the specified embedding type.
@@ -96,6 +142,8 @@ def generate_location_embeddings(lat_lon_list: List[Tuple[float, float]],
         return generate_satclip_embeddings(lat_lon_list, satclip_type='l10')
     elif embedding_type == "satclip_L40":
         return generate_satclip_embeddings(lat_lon_list, satclip_type='l40')
+    elif embedding_type == "alphaearth":
+        return generate_alphaearth_embeddings(lat_lon_list)
     else:
         raise ValueError(f"Unsupported embedding type: {embedding_type}")
 

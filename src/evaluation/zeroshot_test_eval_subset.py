@@ -412,7 +412,7 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
             if subset_params.get('num_domains'):
                 checkpoint_parts.append(f"K{subset_params['num_domains']}")
                 if subset_params.get('domain_selection_method') == 'ot':
-                    checkpoint_parts.append(f"OT_{subset_params['ot_embedding_type']}_{subset_params.get('ot_method', 'sinkhorn')}_{subset_params.get('ot_reg', '0.01')}_{subset_params.get('ot_iter', '1000')}_{subset_params.get('ot_metric', 'cosine')}_{subset_params.get('ot_norm', 'max')}")
+                    checkpoint_parts.append(f"OT_{subset_params['ot_embedding_type']}_{subset_params.get('ot_method', 'sinkhorn_log')}_{subset_params.get('ot_reg', '0.01')}_{subset_params.get('ot_iter', '1000')}_{subset_params.get('ot_metric', 'cosine')}_{subset_params.get('ot_norm', 'max')}")
                 else:
                     checkpoint_parts.append(subset_params['domain_selection_method'])
             if subset_params.get('val_subset_size'):
@@ -535,9 +535,14 @@ if __name__ == '__main__':
     parser.add_argument('--ot_metric', type=str, help='OT metric (if OT method used)')
     parser.add_argument('--ot_norm', type=str, help='OT normalization (if OT method used)')
     parser.add_argument('--val_subset_size', type=int, help='Validation subset size V used for training')
-    parser.add_argument('--tgt_domain', type=int, help='Target domain used for training')
+    parser.add_argument('--tgt_domain', type=str,
+                        help="Target domain used for training. Pass an int, or 'all' if training targeted the "
+                             "pooled distribution across every domain.")
 
     args = parser.parse_args()
+
+    if args.tgt_domain is not None and args.tgt_domain != "all":
+        args.tgt_domain = int(args.tgt_domain)
 
     # Create subset parameters dictionary
     subset_params = {

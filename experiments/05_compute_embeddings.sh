@@ -10,7 +10,7 @@ for split in train val test; do
         --data_root $DATA_ROOT \
         --split $split \
         --model_type bert_singlelabel \
-        --output_dir $OUTPUT_DIR
+        --output_dir ./data/geoyfcc_text/embeddings
 
     # GeoCLIP embeddings
     python src/data/embeddings/embeddings.py \

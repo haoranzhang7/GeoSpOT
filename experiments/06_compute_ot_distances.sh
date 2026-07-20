@@ -1,12 +1,24 @@
 #!/bin/bash
 set -e
 
-EMBEDDING_DIR="./data/embeddings"
-RESULT_DIR="./data/geoyfcc/distances/ot_distance"
+export CUDA_VISIBLE_DEVICES=2
 
-for model_type in bert geoclip satclip_L10 satclip_L40; do
-    python src/data/distances/pairwise_distance.py \
-        --embedding_dir $EMBEDDING_DIR \
-        --result_dir $RESULT_DIR \
-        --model_type $model_type
+DATASET="geoyfcc_text"
+TOTAL_DOMAINS=62
+K=1
+NORMALIZE_COST="max_per_domain"
+
+for model_type in bert geoclip geodesic satclip; do
+    for src_domain_idx in $(seq 0 $((TOTAL_DOMAINS - 1))); do
+        for metric in cosine; do
+            python src/distances/ot_distance.py \
+                --dataset-name $DATASET \
+                --embedding-type $model_type \
+                --source-domain-idx $src_domain_idx \
+                --total-domains $TOTAL_DOMAINS \
+                --k $K \
+                --metric $metric \
+                --normalize-cost $NORMALIZE_COST
+        done
+    done
 done

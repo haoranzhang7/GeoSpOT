@@ -3,7 +3,7 @@ set -e
 
 # Paths
 DATA_DIR="./data"
-OT_DISTANCE_DIR="./data/geoyfcc/distances/ot_distance/"
+OT_DISTANCE_DIR="./data/geoyfcc_text/distances/ot_distance/"
 CHECKPOINT_ROOT="./results/subset/checkpoints"
 LOG_ROOT="./results/subset/logs"
 RESULTS_ROOT="./results/subset/test_results"
@@ -54,7 +54,7 @@ for tgt in "${TARGET_DOMAINS[@]}"; do
                         -s $seed --subset_size $budget --val_subset_size $val_budget \
                         --num_domains $k --domain_selection_method ot \
                         --tgt_domain $tgt --ot_embedding_type $emb \
-                        --ot_method sinkhorn --ot_reg 0.01 --ot_iter 1000 \
+                        --ot_method sinkhorn_log --ot_reg 0.01 --ot_iter 1000 \
                         --ot_metric cosine --ot_norm max_per_domain
                 done
 

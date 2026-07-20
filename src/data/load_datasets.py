@@ -108,16 +108,20 @@ def get_domain_split_mask(dataset_name: str, dataset, domain_idx: int, split: st
     if dataset_name == "geoyfcc_text":
         from datasets.geoyfcc.geoyfcc import get_domain_indices_from_geoyfcc, get_split_indices
 
-        # Domain mask
-        domain_indices, _ = get_domain_indices_from_geoyfcc(dataset, domain_idx)
-        domain_mask = np.zeros(len(dataset), dtype=bool)
-        domain_mask[domain_indices] = True
-
         # Split mask
         split_indices = get_split_indices(dataset, split)
 
         split_mask = np.zeros(len(dataset), dtype=bool)
         split_mask[split_indices] = True
+
+        if domain_idx == "all":
+            # No domain restriction: every domain counts as in-domain
+            return split_mask
+
+        # Domain mask
+        domain_indices, _ = get_domain_indices_from_geoyfcc(dataset, domain_idx)
+        domain_mask = np.zeros(len(dataset), dtype=bool)
+        domain_mask[domain_indices] = True
 
         return domain_mask & split_mask
     

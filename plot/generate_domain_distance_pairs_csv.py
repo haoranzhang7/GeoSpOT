@@ -1,5 +1,5 @@
 import argparse
-import os
+from pathlib import Path
 
 import pandas as pd
 
@@ -27,9 +27,10 @@ def main(args):
     pairs = pairs[['src_domain_idx', 'src_domain_name', 'tgt_domain_idx', 'tgt_domain_name', 'mmd_distance']]
     pairs = pairs.sort_values('mmd_distance', ascending=False).reset_index(drop=True)
 
-    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
-    pairs.to_csv(args.output_file, index=False)
-    print(f"Saved {len(pairs)} domain pairs to {args.output_file}")
+    out_path = Path(args.output_file)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pairs.to_csv(out_path, index=False)
+    print(f"Saved {len(pairs)} domain pairs to {out_path}")
 
 
 if __name__ == '__main__':

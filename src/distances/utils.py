@@ -35,6 +35,17 @@ def _load_dataset_and_domains(dataset_name):
     return ds, domains
 
 
+def _load_train_dataset_and_domains(dataset_name):
+    """Like _load_dataset_and_domains, but pre-filtered to the train split (row-aligned with
+    embeddings that were themselves extracted from the train split only, e.g. bert.pt)."""
+    if dataset_name == "geoyfcc_text":
+        from datasets.geoyfcc.geoyfcc import GeoYFCCText
+        ds = GeoYFCCText(root=str(DATA_ROOT / dataset_name), split="train")
+        domains = np.array(ds.df["country_id"])
+        return ds, domains
+    return _load_dataset_and_domains(dataset_name)
+
+
 _LATLON_COLUMNs = [("lat", "lon"), ("latitude", "longitude")]
 
 
@@ -70,8 +81,14 @@ def load_embeddings_and_domains(dataset_name, embedding_type):
         emb_path = DATA_ROOT / dataset_name / f"{dataset_name}_{embedding_type}_embeddings.pt"
     embeddings = torch.load(emb_path, map_location="cpu")
 
-    _, domains = _load_dataset_and_domains(dataset_name)
+    _, domains = _load_train_dataset_and_domains(dataset_name)
     return embeddings, domains
+
+
+def domain_slice(tensor, domains_array, domain_idx):
+    if domain_idx == "all":
+        return tensor[domains_array >= 0]
+    return tensor[domains_array == domain_idx]
 
 
 def get_embs(embeddings, domains, idx, max_n, device):
@@ -93,9 +110,10 @@ def get_ot_distance_cache_path(result_dir, embedding_type, src_idx, tgt_idx, ot_
     src_str, tgt_str = format_domain_identifier(src_idx), format_domain_identifier(tgt_idx)
     lambda_str = f"_lambda_{lambda_param}" if lambda_param is not None else ""
     greedy_str = "_greedy_sequential" if include_greedy_sequential_str else ""
+    debiased_str = "_debiased" if getattr(ot_args, "debiased", False) else ""
     filename = (f"ot_distance_{ot_args.normalize_cost}_{embedding_type}_"
                 f"{src_str}_to_{tgt_str}_{ot_args.method}_eps_{ot_args.reg_e}_"
-                f"maxIter_{ot_args.max_iter}_{metric}{greedy_str}{lambda_str}.pkl")
+                f"maxIter_{ot_args.max_iter}_{metric}{greedy_str}{lambda_str}{debiased_str}.pkl")
     return os.path.join(result_dir, "ot_distance_cache", filename)
 
 

@@ -1,4 +1,3 @@
-import ast
 import os
 import pickle
 import numpy as np
@@ -13,24 +12,6 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-def _parse_label_ids(val) -> list:
-    """Parse label_id field into a list of ints, handling all storage formats."""
-    if isinstance(val, str):
-        try:
-            result = ast.literal_eval(val)
-            return [int(result)] if isinstance(result, (int, float)) else [int(x) for x in result]
-        except (ValueError, SyntaxError):
-            return []
-    if isinstance(val, (int, float)):
-        return [] if pd.isna(val) else [int(val)]
-    if hasattr(val, '__iter__'):
-        try:
-            return [int(x) for x in val if x is not None and not (isinstance(x, float) and pd.isna(x))]
-        except (TypeError, ValueError):
-            return []
-    return []
-
-
 def clean_text(text) -> str:
     if pd.isna(text) or not text:
         return ""
@@ -43,7 +24,7 @@ def clean_text(text) -> str:
 
 class GeoYFCCBase(Dataset):
     def __init__(self, root: str = '.', metadata_file: Optional[str] = None,
-                 domain_idx: Optional[int] = None, expand_multilabel: bool = False):
+                 domain_idx: Optional[int] = None, expand_multilabel: bool = True):
         self.root = root
         self.num_classes = 1261
         if metadata_file is None:
@@ -78,16 +59,63 @@ class GeoYFCCBase(Dataset):
             self._expand_to_single_label()
 
     def _expand_to_single_label(self):
+        """Expand multi-label samples to single-label samples.
+
+        This method handles cases where label_id might contain multiple labels.
+        If your data is already single-label, this can be skipped.
+        """
         print("[INFO] Expanding multi-label dataset to single-label...")
-        rows = []
+        expanded_rows = []
+
         for idx, row in tqdm(self.df.iterrows(), total=len(self.df), desc="Expanding samples"):
-            for label_id in _parse_label_ids(row.get("label_id", [])):
+            # Parse label_id - handle different formats
+            label_ids = row.get("label_ids", [])
+
+            # Handle string representation of lists like "[1, 2, 3]"
+            if isinstance(label_ids, str):
+                try:
+                    # Remove brackets and split by comma
+                    if label_ids.startswith('[') and label_ids.endswith(']'):
+                        label_ids = label_ids[1:-1]
+                    if label_ids.strip():
+                        label_ids = [int(x.strip()) for x in label_ids.split(',') if x.strip()]
+                    else:
+                        label_ids = []
+                except (ValueError, AttributeError):
+                    # If it's just a single number as string
+                    try:
+                        label_ids = [int(label_ids)]
+                    except ValueError:
+                        label_ids = []
+
+            # Handle actual list or other iterable
+            elif hasattr(label_ids, '__iter__') and not isinstance(label_ids, str):
+                try:
+                    label_ids = [int(x) for x in label_ids if x is not None]
+                except (ValueError, TypeError):
+                    label_ids = []
+
+            # Handle single numeric value
+            elif isinstance(label_ids, (int, float)) and not pd.isna(label_ids):
+                label_ids = [int(label_ids)]
+            else:
+                label_ids = []
+
+            # Skip samples with no labels
+            if not label_ids:
+                continue
+
+            # Create one sample for each label
+            for label_id in label_ids:
                 new_row = row.copy()
-                new_row['label_id'] = label_id
+                new_row['label_id'] = label_id  # Single label
                 new_row['original_yfcc_row_id'] = row.get('yfcc_row_id', idx)
+                # Create unique ID for this expanded sample
                 new_row['yfcc_row_id'] = f"{row.get('yfcc_row_id', idx)}_{label_id}"
-                rows.append(new_row)
-        self.df = pd.DataFrame(rows).reset_index(drop=True)
+                expanded_rows.append(new_row)
+
+        # Replace the original dataframe with expanded one
+        self.df = pd.DataFrame(expanded_rows).reset_index(drop=True)
         print(f"[INFO] Expanded to {len(self.df)} single-label samples")
 
     def get_coordinates(self, idx: int) -> Tuple[Optional[float], Optional[float]]:
@@ -148,7 +176,7 @@ class GeoYFCCText(GeoYFCCBase):
     def __init__(self, root: str = '.', metadata_file: Optional[str] = None,
                 domain_idx: Optional[int] = None, split: Optional[str] = None,
                 filter_missing_text: bool = True, save_filtered: bool = True,
-                expand_multilabel: bool = False, verbose: bool = True):
+                expand_multilabel: bool = True, verbose: bool = True):
         self.root = root
         self.filtered_file = os.path.join(root, "geoyfcc_text_filtered_single_label.pkl")
         
@@ -220,9 +248,17 @@ class GeoYFCCText(GeoYFCCBase):
         """Filter out samples with empty combined text."""
         if self.filter_text_enabled:
             print("[INFO] Filtering out samples with empty combined text...")
-            combined = (self.df["title"].fillna("").astype(str) + " " +
-                        self.df["description"].fillna("").astype(str)).str.strip()
-            self.df = self.df[combined.astype(bool)].reset_index(drop=True)
+            valid_mask = self.df.apply(
+                lambda row: bool(
+                    (
+                        "" if pd.isna(row.get("title")) else str(row.get("title"))
+                        + " " +
+                        "" if pd.isna(row.get("description")) else str(row.get("description"))
+                    ).strip()
+                ),
+                axis=1
+            )
+            self.df = self.df[valid_mask].reset_index(drop=True)
             print(f"[INFO] {len(self.df)} samples remaining after text filtering")
 
     def save_filtered_dataset(self):

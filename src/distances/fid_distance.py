@@ -37,6 +37,10 @@ def mean_dist(mu1, mu2, metric="cosine", normalize_args=None):
 
 def fid(mu1, sigma1, mu2, sigma2, metric="cosine", normalize_args=None):
     mean_term = mean_dist(mu1, mu2, metric, normalize_args) ** 2
+    
+    # Compute the matrix square root of the covariance product.
+    # This is equivalent (under the trace) to
+    # (Sigma1^(1/2) Sigma2 Sigma1^(1/2))^(1/2) for PSD covariances.
     covmean = linalg.sqrtm(sigma1 @ sigma2)
 
     if np.iscomplexobj(covmean):
