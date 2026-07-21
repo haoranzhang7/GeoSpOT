@@ -35,10 +35,9 @@ def main(args):
     for i, (ax, df, x_title, color) in enumerate(zip(axes, dfs, x_titles, colors)):
         rho, p_value, r2, n_pairs = scatter_regplot(
             ax, df, x_title, y_title, color, show_ylabel=(i == 0), show_pvalue=False,
-            label_fontsize=28, tick_fontsize=22, legend_fontsize=24)
+            label_fontsize=38, tick_fontsize=30, legend_fontsize=36)
         print(f"{x_title}: rho={rho:.4f}, p={p_value:.4f}, r2={r2:.4f}, n_pairs={n_pairs}")
-    plt.tight_layout()
-    fig.savefig(plot_filepath, bbox_inches="tight", dpi=300)
+    fig.savefig(plot_filepath, bbox_inches="tight", pad_inches=0.3, dpi=300)
     plt.close()
     print(f"Saved plot to {plot_filepath}")
 
@@ -69,7 +68,7 @@ if __name__ == '__main__':
                         help="Additional domain indices considered outliers, excluded from both src and tgt "
                              f"(domain {ALWAYS_EXCLUDED_DOMAINS[0]}, e.g. Panama for geoyfcc_text, is always "
                              "excluded regardless of this flag). Self pairs (src==tgt) are also always excluded.")
-    parser.add_argument('--figsize', type=float, nargs=2, default=(16, 8),
+    parser.add_argument('--figsize', type=float, nargs=2, default=(18, 11),
                         help="Figure size as 'width height' for the whole (multi-panel) figure.")
 
     args = parser.parse_args()

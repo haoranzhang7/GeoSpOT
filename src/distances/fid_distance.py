@@ -55,7 +55,24 @@ def calculate_fid(embeddings1, embeddings2, metric="cosine", normalize_args=None
     return fid(mu1, s1, mu2, s2, metric=metric, normalize_args=normalize_args)
 
 
-def compute_fid_matrix(embeddings, domains, active, n, max_samples, device, metric="cosine", normalize_args=None):
+def fid_cache_path(cache_dir, src, tgt):
+    """FID(P, Q) is symmetric (it's the squared Wasserstein-2 distance between Gaussians), so
+    src/tgt share one cache file regardless of order."""
+    return cache_dir / f"{min(src, tgt)}_{max(src, tgt)}.txt"
+
+
+def cached_fid(cache_dir, src, tgt, compute_fn, force_recompute=False):
+    path = fid_cache_path(cache_dir, src, tgt)
+    if path.exists() and not force_recompute:
+        return float(path.read_text()), True
+    dist = compute_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(dist))
+    return dist, False
+
+
+def compute_fid_matrix(embeddings, domains, active, n, max_samples, device, metric="cosine",
+                        normalize_args=None, cache_dir=None, force_recompute=False):
     matrix = np.full((n, n), np.nan)
     domain_stats = {}
     for idx in active:
@@ -65,10 +82,13 @@ def compute_fid_matrix(embeddings, domains, active, n, max_samples, device, metr
     for src in tqdm(active, desc="src domain", unit="domain"):
         src_mu, src_sig = domain_stats[src]
         for tgt in active:
-            if tgt == src:
+            if tgt == src or not np.isnan(matrix[src, tgt]):
                 continue
             tgt_mu, tgt_sig = domain_stats[tgt]
-            matrix[src, tgt] = float(fid(src_mu, src_sig, tgt_mu, tgt_sig, metric=metric, normalize_args=normalize_args))
+            compute_fn = lambda: float(fid(src_mu, src_sig, tgt_mu, tgt_sig, metric=metric,
+                                            normalize_args=normalize_args))
+            dist, cached = cached_fid(cache_dir, src, tgt, compute_fn, force_recompute)
+            matrix[src, tgt] = matrix[tgt, src] = dist
     return matrix
 
 
@@ -105,7 +125,12 @@ def main():
                         "sample-pairwise distance matrix to take a per-pair max over.")
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--force-recompute", action="store_true", help="Recompute even if a cached pair distance exists")
     args = p.parse_args()
+
+    out_dir = DATA_ROOT / args.dataset / "distances" / "fid_distance"
+    out = out_dir / f"fid_{args.embedding_type}_m{args.metric}_n{args.normalize_cost}.csv"
+    cache_dir = out_dir / "cache" / out.stem
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -118,11 +143,10 @@ def main():
     normalize_args = build_normalize_args(args, embeddings)
 
     matrix = compute_fid_matrix(embeddings, domains, active, n, args.max_samples, device,
-                                 metric=args.metric, normalize_args=normalize_args)
+                                 metric=args.metric, normalize_args=normalize_args,
+                                 cache_dir=cache_dir, force_recompute=args.force_recompute)
 
-    out_dir = DATA_ROOT / args.dataset / "distances" / "fid_distance"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"fid_{args.embedding_type}_m{args.metric}_n{args.normalize_cost}.csv"
     pd.DataFrame(matrix, index=range(n), columns=range(n)).to_csv(out)
     print(f"\nSaved to {out}")
 

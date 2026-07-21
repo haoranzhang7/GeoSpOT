@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 DATASET="geoyfcc_text"
 NORMALIZE_COST="max_per_domain"
 
 for model_type in bert geoclip satclip; do
-    for metric in cosine euclidean; do
+    for metric in euclidean cosine; do
         python src/distances/mmd_distance.py \
             --dataset $DATASET \
             --embedding-type $model_type \

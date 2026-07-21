@@ -117,19 +117,34 @@ def scatter_regplot(ax, df, x_title, y_title, color, *, show_ylabel=True, show_p
         label_text += r"$p$" + f"-value: {p_value:.4f},\n"
     label_text += r"$\mathcal{R}^2$" + f": {r2:.4f}"
 
-    alpha_value = 0.3 if len(df) > 50 else 0.6
-    ax.scatter(df[scatter_x], df[scatter_y], alpha=alpha_value, color=scatter_color)
-    sns.regplot(data=df, x=scatter_x, y=scatter_y, ci=None,
-                scatter=False, fit_reg=True, ax=ax, label=label_text, color=color)
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    for spine in ('left', 'bottom'):
+        ax.spines[spine].set_color('#333333')
+        ax.spines[spine].set_linewidth(1.1)
 
-    ax.tick_params('both', labelsize=tick_fontsize)
-    ax.set_xlabel(x_title, fontsize=label_fontsize)
+    alpha_value = 0.15 if len(df) > 50 else 0.4
+    ax.scatter(df[scatter_x], df[scatter_y], s=38, alpha=alpha_value, color=scatter_color,
+               linewidths=0, zorder=2)
+    sns.regplot(data=df, x=scatter_x, y=scatter_y, ci=None,
+                scatter=False, fit_reg=True, ax=ax, label=label_text, color=color,
+                line_kws={'linewidth': 5, 'zorder': 3, 'solid_capstyle': 'round'})
+
+    ax.tick_params('both', labelsize=tick_fontsize, colors='#333333')
+    ax.set_xlabel(x_title, fontsize=label_fontsize, color='#222222')
     if show_ylabel:
-        ax.set_ylabel(y_title, fontsize=label_fontsize)
+        ax.set_ylabel(y_title, fontsize=label_fontsize, color='#222222')
     else:
         ax.set_ylabel("")
         ax.tick_params(axis='y', labelleft=False)
-    ax.legend(fontsize=legend_fontsize)
+
+    legend = ax.legend(fontsize=legend_fontsize, handlelength=0, handletextpad=0,
+                        frameon=True, fancybox=False, edgecolor='#CCCCCC',
+                        facecolor='white', framealpha=0.9, borderpad=0.7)
+    for handle in legend.legend_handles:
+        handle.set_visible(False)
+    for text in legend.get_texts():
+        text.set_color('#222222')
 
     return rho, p_value, r2, len(df)
 

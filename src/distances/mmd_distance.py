@@ -17,20 +17,18 @@ from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matri
                                         load_cost_constants, compute_and_cache_cost_constants)
 
 
-def metric_dist(X, Y, metric="cosine", normalize_args=None):
+def metric_dist(X, Y, metric="cosine"):
     """Pairwise distance matrix (not squared), optionally normalized the same way OT normalizes its cost matrix."""
     dist = compute_cost_matrix(X, Y, metric)
-    if normalize_args is not None:
-        dist = normalize_cost_matrix(dist, normalize_args)
     return dist
 
 
-def gaussian_kernel(X, Y, sigma=1.0, metric="cosine", normalize_args=None):
+def gaussian_kernel(X, Y, sigma=1.0, metric="cosine", **kernel_kwargs):
     """
     Returns kernel matrix K where:
     K_ij = exp(-d(x_i, y_j)^2 / (2 sigma^2))
     """
-    dist2 = metric_dist(X, Y, metric, normalize_args) ** 2
+    dist2 = metric_dist(X, Y, metric) ** 2
     return torch.exp(-dist2 / (2 * sigma ** 2))
 
 def linear_kernel(X, Y):
@@ -43,25 +41,28 @@ def mmd(X, Y, kernel_fn, **kernel_kwargs):
     """
     Computes the MMD distance between two sets of samples X and Y using the specified kernel function.
     """
-    Z = torch.cat([X, Y], dim=0)
+    
+    K_xx = kernel_fn(X, X, **kernel_kwargs)
+    K_yy = kernel_fn(Y, Y, **kernel_kwargs)
+    K_xy = kernel_fn(X, Y, **kernel_kwargs)
 
-    # full kernel matrix
-    K = kernel_fn(Z, Z, **kernel_kwargs)
+    normalize_args = kernel_kwargs.get("normalize_args")
+    if normalize_args is not None and normalize_args.normalize_cost.startswith("max_per_domain"):
+        normalization_constant = max(K_xx.max(), K_yy.max(), K_xy.max())
+        K_xx = K_xx / normalization_constant
+        K_yy = K_yy / normalization_constant
+        K_xy = K_xy / normalization_constant
 
-    n = X.shape[0]
-
-    K_xx = K[:n, :n]
-    K_yy = K[n:, n:]
-    K_xy = K[:n, n:]
-
-    return K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
+    return (K_xx.mean()
+            + K_yy.mean()
+            - 2 * K_xy.mean())
 
 
 def median_heuristic_sigma(X, Y, max_samples=2000, metric="cosine", normalize_args=None):
     Z = torch.cat([X, Y], dim=0)
     if len(Z) > max_samples:
         Z = Z[torch.randperm(len(Z))[:max_samples]]
-    dists = metric_dist(Z, Z, metric, normalize_args)
+    dists = metric_dist(Z, Z, metric)
     mask = ~torch.eye(len(Z), dtype=torch.bool, device=Z.device)
     return dists[mask].median().item()
 
@@ -96,18 +97,35 @@ def calculate_mmd(X, Y, kernel="multiscale", sigma=None, scales=(0.1, 0.5, 1.0, 
     raise ValueError(f"Unknown kernel: {kernel}")
 
 
+def mmd_cache_path(cache_dir, src, tgt):
+    """MMD(X, Y) is symmetric, so src/tgt share one cache file regardless of order."""
+    return cache_dir / f"{min(src, tgt)}_{max(src, tgt)}.txt"
+
+
+def cached_mmd(cache_dir, src, tgt, compute_fn, force_recompute=False):
+    path = mmd_cache_path(cache_dir, src, tgt)
+    if path.exists() and not force_recompute:
+        return float(path.read_text()), True
+    dist = compute_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(dist))
+    return dist, False
+
+
 def compute_mmd_matrix(embeddings, domains, active, n, kernel, sigma, max_samples, device,
-                        metric="cosine", normalize_args=None):
+                        metric="cosine", normalize_args=None, cache_dir=None, force_recompute=False):
     matrix = np.full((n, n), np.nan)
     for src in tqdm(active, desc="src domain", unit="domain"):
         src_embs = get_embs(embeddings, domains, src, max_samples, device)
         for tgt in active:
-            if tgt == src:
+            if tgt == src or not np.isnan(matrix[src, tgt]):
                 continue
             tgt_embs = get_embs(embeddings, domains, tgt, max_samples, device)
-            matrix[src, tgt] = float(calculate_mmd(src_embs, tgt_embs, kernel=kernel, sigma=sigma,
-                                                    metric=metric, normalize_args=normalize_args))
-            print(f"  ({src},{tgt}) n=({len(src_embs)},{len(tgt_embs)}): {matrix[src, tgt]:.6f}")
+            compute_fn = lambda: float(calculate_mmd(src_embs, tgt_embs, kernel=kernel, sigma=sigma,
+                                                       metric=metric, normalize_args=normalize_args))
+            dist, cached = cached_mmd(cache_dir, src, tgt, compute_fn, force_recompute)
+            matrix[src, tgt] = matrix[tgt, src] = dist
+            print(f"  ({src},{tgt}): {dist:.6f}{' [cached]' if cached else ''}")
             del tgt_embs; gc.collect()
         del src_embs
         torch.cuda.empty_cache()
@@ -148,7 +166,12 @@ def main():
     p.add_argument("--sigma", type=float, default=None)
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--force-recompute", action="store_true", help="Recompute even if a cached pair distance exists")
     args = p.parse_args()
+
+    out_dir = DATA_ROOT / args.dataset / "distances" / "mmd_distance"
+    out = out_dir / f"mmd_{args.embedding_type}_k{args.kernel}_m{args.metric}_n{args.normalize_cost}.csv"
+    cache_dir = out_dir / "cache" / out.stem
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -161,11 +184,10 @@ def main():
     normalize_args = build_normalize_args(args, embeddings)
 
     matrix = compute_mmd_matrix(embeddings, domains, active, n, args.kernel, args.sigma, args.max_samples, device,
-                                 metric=args.metric, normalize_args=normalize_args)
+                                 metric=args.metric, normalize_args=normalize_args,
+                                 cache_dir=cache_dir, force_recompute=args.force_recompute)
 
-    out_dir = DATA_ROOT / args.dataset / "distances" / "mmd_distance"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"mmd_{args.embedding_type}_k{args.kernel}_m{args.metric}_n{args.normalize_cost}.csv"
     pd.DataFrame(matrix, index=range(n), columns=range(n)).to_csv(out)
     print(f"\nSaved to {out}")
 

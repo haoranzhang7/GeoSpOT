@@ -43,6 +43,22 @@ VAL_BUDGET[10000]=5000
 for k in "${K_VALUES[@]}"; do
     for budget in "${BUDGET_VALUES[@]}"; do
         val_budget=${VAL_BUDGET[$budget]}
+        # Random selection (seeded), K random domains
+        for seed in "${SEEDS[@]}"; do
+            python src/training/pretrain_by_domain_subset.py \
+                --dataset $DATASET --domain_type $DOMAIN_TYPE \
+                --data_dir $DATA_DIR \
+                --checkpoint_root $CHECKPOINT_ROOT --log_root $LOG_ROOT \
+                --model $MODEL --lr $LR --num_epochs $NUM_EPOCHS \
+                --optimizer $OPTIMIZER --weight_decay $WEIGHT_DECAY --scheduler $SCHEDULER \
+                --train_batch_size $TRAIN_BATCH_SIZE --eval_batch_size $EVAL_BATCH_SIZE \
+                --patience $PATIENCE --start_from_epoch $START_FROM_EPOCH \
+                -s $seed --subset_size $budget --val_subset_size $val_budget \
+                --num_domains $k --domain_selection_method random \
+                --tgt_domain all
+        done
+
+        # OT-based selection
         for seed in "${SEEDS[@]}"; do
             for emb in "${OT_EMBEDDING_TYPES[@]}"; do
                 python src/training/pretrain_by_domain_subset.py \

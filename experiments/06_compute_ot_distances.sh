@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 DATASET="geoyfcc_text"
 TOTAL_DOMAINS=62
 K=1
 NORMALIZE_COST="max_per_domain"
 
-for model_type in bert geoclip geodesic satclip; do
+for model_type in satclip geodesic bert geoclip; do
     for src_domain_idx in $(seq 0 $((TOTAL_DOMAINS - 1))); do
         for metric in cosine; do
             python src/distances/ot_distance.py \

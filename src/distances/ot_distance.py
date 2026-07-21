@@ -151,10 +151,20 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, data_source, do
         lambda_param=lambda_for_cache,
     )
 
-    if os.path.exists(cache_path) and not args.force_recompute:
-        cache_data = load_ot_distance(cache_path)
-        if cache_data:
-            return cache_data['distance'], True
+    # OT distance is symmetric for a plain single-domain pair, so also check the reverse-direction
+    # cache (not the pooled "all" source, which is never a valid target -- see save_k1_matrix).
+    reverse_cache_path = None
+    if source_domain_idx != "all" and len(tgt_domain_indices) == 1 and tgt_domain_indices[0] != source_domain_idx:
+        reverse_cache_path = get_ot_distance_cache_path(
+            result_dir=str(result_dir), embedding_type=embedding_type, src_idx=tgt_domain_indices[0],
+            tgt_idx=[source_domain_idx], ot_args=ot_args,
+            include_greedy_sequential_str=include_greedy_sequential_str, lambda_param=lambda_for_cache)
+
+    for path in (cache_path, reverse_cache_path):
+        if path and os.path.exists(path) and not args.force_recompute:
+            cache_data = load_ot_distance(path)
+            if cache_data:
+                return cache_data['distance'], True
 
     t0 = time.time()
     if "+" in embedding_type:
@@ -184,8 +194,6 @@ def compute_or_load_distance(args, src_data, tgt_domain_indices, data_source, do
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     save_ot_distance(cache_path, distance, metadata)
 
-    torch.cuda.empty_cache()
-    gc.collect()
     return distance, False
 
 def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_source, domains_source,
@@ -208,8 +216,6 @@ def greedy_sequential_ot_selection(args, src_data, all_domain_indices, data_sour
                 embedding_type, max_const, min_const, source_domain_idx,
                 include_greedy_sequential_str=step > 0, lambda_param=lambda_param
             )
-            torch.cuda.empty_cache()
-            gc.collect()
 
             if distance < best_distance:
                 best_distance, best_domain = distance, candidate_domain

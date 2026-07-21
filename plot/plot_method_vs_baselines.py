@@ -1,11 +1,15 @@
 """Compare subset-selection methods against random/global baselines, split out by K.
 
-Reads the chart-estimated CSV (domain, K, method, value_est, std_est) and, per domain,
-draws a dot plot: one dodged point per method per K (no bars, no connecting lines, so
-no K-trend is implied). Random is plotted the same way as the other methods (per-K,
-not averaged) since it varies by K same as everything else; global is shown as a
-horizontal reference band since it has no K. BERT is excluded -- the comparison of
-interest is GeoCLIP/SatCLIP vs. Geodesic vs. random vs. global.
+Reads the chart-estimated CSV (domain, budget, K, method, value_est, std_est) and,
+per domain, draws a dot plot: one dodged point per method per K (no bars, no
+connecting lines, so no K-trend is implied). Random is plotted the same way as the
+other methods (per-K, not averaged) since it varies by K same as everything else;
+global is shown as a horizontal reference band since it has no K. BERT is excluded
+-- the comparison of interest is GeoCLIP/SatCLIP vs. Geodesic vs. random vs. global.
+
+All K values always appear together on one plot. Saves one plot per available
+budget, with the budget appended to the filename (e.g. foo.png -> foo_N2000.png,
+foo_N5000.png, ...).
 """
 
 import os
@@ -51,6 +55,7 @@ GLOBAL_COLOR = 'grey'
 def load_data(csv_path):
     df = pd.read_csv(csv_path)
     df['K'] = df['K'].astype(str)
+    df['budget'] = df['budget'].astype(int)
     return df
 
 
@@ -116,7 +121,10 @@ def main():
 
     df = load_data(args.csv)
     domains = args.domains if args.domains else [d for d in df['domain'].unique()]
-    plot(df, domains, args.out)
+
+    root, ext = os.path.splitext(args.out)
+    for budget in sorted(df['budget'].unique()):
+        plot(df[df['budget'] == budget], domains, f'{root}_N{budget}{ext}')
 
 
 if __name__ == '__main__':

@@ -38,16 +38,35 @@ def avg_geodesic_distance(src_coords, tgt_coords, batch_size=5000):
     return total / (n_src * n_tgt)
 
 
-def compute_avg_geodesic_matrix(coords, domains, active, n, max_samples, device, batch_size):
+def geodesic_cache_path(cache_dir, src, tgt):
+    """avg_geo_dist(s, t) is symmetric (mean over the same unordered set of pairwise haversine
+    distances), so src/tgt share one cache file regardless of order."""
+    return cache_dir / f"{min(src, tgt)}_{max(src, tgt)}.txt"
+
+
+def cached_geodesic(cache_dir, src, tgt, compute_fn, force_recompute=False):
+    path = geodesic_cache_path(cache_dir, src, tgt)
+    if path.exists() and not force_recompute:
+        return float(path.read_text()), True
+    dist = compute_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(dist))
+    return dist, False
+
+
+def compute_avg_geodesic_matrix(coords, domains, active, n, max_samples, device, batch_size,
+                                 cache_dir=None, force_recompute=False):
     matrix = np.full((n, n), np.nan)
     domain_coords = {idx: get_embs(coords, domains, idx, max_samples, device) for idx in active}
 
     for src in tqdm(active, desc="src domain", unit="domain"):
         src_coords = domain_coords[src]
         for tgt in active:
-            if tgt == src:
+            if tgt == src or not np.isnan(matrix[src, tgt]):
                 continue
-            matrix[src, tgt] = avg_geodesic_distance(src_coords, domain_coords[tgt], batch_size)
+            compute_fn = lambda: avg_geodesic_distance(src_coords, domain_coords[tgt], batch_size)
+            dist, cached = cached_geodesic(cache_dir, src, tgt, compute_fn, force_recompute)
+            matrix[src, tgt] = matrix[tgt, src] = dist
     return matrix
 
 
@@ -58,7 +77,12 @@ def main():
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=5000)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--force-recompute", action="store_true", help="Recompute even if a cached pair distance exists")
     args = p.parse_args()
+
+    out_dir = DATA_ROOT / args.dataset / "distances" / "geodesic_distance"
+    out = out_dir / "geodesic_avg_distance.csv"
+    cache_dir = out_dir / "cache" / out.stem
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -68,11 +92,10 @@ def main():
     active = [i for i in range(n) if (domains == i).sum() > 0]
     print(f"{len(active)} non-empty domains, {len(active) * (len(active) - 1)} pairs to compute")
 
-    matrix = compute_avg_geodesic_matrix(coords, domains, active, n, args.max_samples, device, args.batch_size)
+    matrix = compute_avg_geodesic_matrix(coords, domains, active, n, args.max_samples, device, args.batch_size,
+                                          cache_dir=cache_dir, force_recompute=args.force_recompute)
 
-    out_dir = DATA_ROOT / args.dataset / "distances" / "geodesic_distance"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / "geodesic_avg_distance.csv"
     pd.DataFrame(matrix, index=range(n), columns=range(n)).to_csv(out)
     print(f"\nSaved to {out}")
 

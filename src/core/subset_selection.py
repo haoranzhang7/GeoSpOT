@@ -41,6 +41,13 @@ def _select_best_ot_combination(
     if None in [ot_dir, source_domain_idx, embedding_type, num_domains]:
         raise ValueError("Missing required OT parameters: ot_distance_dir, source_domain_idx, embedding_type, method, reg, iter, metric, norm, num_domains")
 
+    # src/distances/ot_distance.py always names geodesic-embedding output files with
+    # metric "geodesic" (overriding whatever --metric was passed), since the geodesic
+    # embedding type only ever uses the haversine metric. Mirror that override here so
+    # the filename we look for matches what was actually written.
+    if embedding_type == "geodesic":
+        metric = "geodesic"
+
     num_domains = int(num_domains)
     method_suffix = "greedy" if num_domains > 1 else "all_combinations"
     config_suffix = f"{method_suffix}_method_{ot_method}_reg_{reg}_iter_{iters}_metric_{metric}_norm_{norm}"
