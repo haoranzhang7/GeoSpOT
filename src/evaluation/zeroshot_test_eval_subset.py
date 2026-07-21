@@ -57,8 +57,8 @@ def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_s
     worker_init_fn = functools.partial(seed_worker, model_seed=model_data_seed)
     
     test_dataloader = get_domain_dataloader(
-        dataset_name, dataset, test_mask, batch_size=eval_batch_size, 
-        shuffle=False, num_workers=16, pin_memory=True, 
+        dataset_name, dataset, None, test_mask, batch_size=eval_batch_size,
+        shuffle=False, num_workers=16, pin_memory=True,
         worker_init_fn=worker_init_fn, generator=generator
     )
     return test_dataloader
@@ -288,8 +288,10 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
         subset_suffix += f"_subset{subset_params['subset_size']}"
     if subset_params.get('num_domains'):
         subset_suffix += f"_K{subset_params['num_domains']}_{subset_params['domain_selection_method']}"
-    if subset_params.get('ot_norm'):
-        norm_type = f"{subset_params['ot_norm']}"
+    if subset_params.get('domain_selection_method') == 'ot' and subset_params.get('ot_norm'):
+        norm_type = subset_params['ot_norm']
+    else:
+        norm_type = 'none'
 
     CHECKPOINT_DIR = os.path.join(args.checkpoint_root, f"{training_task_directory_name}{subset_suffix}", model_name, norm_type)
     LOG_DIR = os.path.join(args.log_root, task_directory_name, model_name)

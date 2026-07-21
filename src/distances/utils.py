@@ -20,7 +20,7 @@ def _load_dataset_and_domains(dataset_name):
     if dataset_name == "geoyfcc_text":
         from datasets.geoyfcc.geoyfcc import GeoYFCCText
         ds = GeoYFCCText(root=str(DATA_ROOT / dataset_name), split=None)
-        train_mask = np.array(ds.df["split"] == "train")
+        train_mask = np.array(ds.df["split"].isin(["train", "val"]))
         domains = np.where(train_mask, np.array(ds.df["country_id"]), -1)
     elif dataset_name == "fmow":
         from datasets.fmow.fmow import FMoW
@@ -36,11 +36,13 @@ def _load_dataset_and_domains(dataset_name):
 
 
 def _load_train_dataset_and_domains(dataset_name):
-    """Like _load_dataset_and_domains, but pre-filtered to the train split (row-aligned with
-    embeddings that were themselves extracted from the train split only, e.g. bert.pt)."""
+    """Like _load_dataset_and_domains, but pre-filtered to the train+val split (row-aligned with
+    embeddings that were themselves extracted from the train split only, e.g. bert.pt) while still
+    excluding test."""
     if dataset_name == "geoyfcc_text":
         from datasets.geoyfcc.geoyfcc import GeoYFCCText
-        ds = GeoYFCCText(root=str(DATA_ROOT / dataset_name), split="train")
+        ds = GeoYFCCText(root=str(DATA_ROOT / dataset_name), split=None)
+        ds.df = ds.df[ds.df["split"].isin(["train", "val"])].reset_index(drop=True)
         domains = np.array(ds.df["country_id"])
         return ds, domains
     return _load_dataset_and_domains(dataset_name)

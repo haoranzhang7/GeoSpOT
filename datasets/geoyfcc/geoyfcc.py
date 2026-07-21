@@ -211,21 +211,18 @@ class GeoYFCCText(GeoYFCCBase):
             print(f"[INFO] {len(self.df)} samples after applying '{self.split}' split")
 
     def set_split(self, seed=42):
-        """
-        CHANGED: This method is now only called if 'split' column is missing.
-        Since your CSV already has 'split' column, this serves as a fallback.
-        """
-        print("[INFO] Creating train/val/test split (split column not found in CSV)...")
+        print("[INFO] Creating train/val/test split based on is_train column and country_id...")
+        self.df["split"] = self.df["is_train"].apply(lambda x: "test" if not x else "train")
 
-        # CHANGED: Check if is_train exists; if not, derive from split column
-        if 'is_train' in self.df.columns:
-            self.df["split"] = self.df["is_train"].apply(lambda x: "test" if not x else "train")
-        else:
-            print("[WARNING] 'is_train' column not found. Defaulting all samples to 'train'")
-            self.df["split"] = "train"
-        
         # For each country, split training data into 60% train and 20% val
         np.random.seed(seed)
+        for country_id in self.df["country_id"].unique():
+            train_idx = self.df.index[(self.df["country_id"] == country_id) & (self.df["split"] == "train")].to_numpy()
+            if len(train_idx) == 0:
+                continue
+            train_idx = np.random.permutation(train_idx)
+            n_train = int(0.75 * len(train_idx))
+            self.df.loc[train_idx[n_train:], "split"] = "val"
 
         self.assess_split()
 
