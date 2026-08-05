@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import seaborn as sns; print\\(sns.__version__\\)\")",
+      "Bash(/home/libe2152/miniconda3/envs/mapping/bin/python -c ' *)",
+      "Bash(/home/libe2152/miniconda3/envs/mapping/bin/python plot/plot_country_distance_map.py)",
+      "Bash(python3 -c \"import geopandas, seaborn, shapely; print\\('ok'\\)\")",
+      "Bash(awk -F, 'NR==1{for\\(i=1;i<=NF;i++\\)h[i]=$i} NR>1{for\\(i=1;i<=NF;i++\\) if\\(h[i]==\"lambda\" && $i!=\"\"\\) print}' plot/plots/rho_overall.csv)",
+      "Bash(python plot/build_overall_rho_csv.py --dataset geoyfcc_text)",
+      "Bash(python3 -c \"print\\(len\\(open\\('src/distances/ot_distance.py'\\).read\\(\\).split\\(chr\\(10\\)\\)\\)\\)\")",
+      "Bash(python3 -m py_compile src/distances/*.py)",
+      "Bash(python3 -m py_compile plot/*.py src/distances/*.py)"
+    ]
+  }
+}

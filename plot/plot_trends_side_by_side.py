@@ -1,8 +1,7 @@
 """Like plot_trends_individual.py, but draws one distance matrix per embedding type as a
 side-by-side panel in a single figure (e.g. GeoCLIP vs. SatCLIP), sharing the y-axis."""
 
-import os
-import argparse
+import os, argparse
 
 from trend_common import (
     EMBEDDING_LABELS, EMBEDDING_COLORS, load_results, build_combined_df,
@@ -28,8 +27,7 @@ def main(args):
     y_title = y_title_for(args.metric, args.rescale_acc)
     tags = filename_tags(args.rescale_acc, args.mask_domains, args.outlier_domains, include_self_pair=False)
     embeddings_str = "_".join(args.embedding_types)
-    plot_filename = f"trend_{args.distance_type}_{args.metric}_{embeddings_str}_{tags}.png"
-    plot_filepath = os.path.join(args.output_dir, plot_filename)
+    plot_filepath = os.path.join(args.output_dir, f"trend_{args.distance_type}_{args.metric}_{embeddings_str}_{tags}.png")
 
     fig, axes = plt.subplots(1, len(dfs), figsize=tuple(args.figsize), sharey=True)
     for i, (ax, df, x_title, color) in enumerate(zip(axes, dfs, x_titles, colors)):
@@ -44,32 +42,18 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--distance_files', type=str, nargs='+', required=True,
-                        help="Paths to square N x N distance matrix CSVs, one per subplot, e.g. an OT distance "
-                             "matrix for GeoCLIP followed by one for SatCLIP.")
-    parser.add_argument('--embedding_types', type=str, nargs='+', required=True, choices=list(EMBEDDING_LABELS),
-                        help="Embedding type per distance file, used to color each subplot and label its x-axis.")
-    parser.add_argument('--distance_type', type=str, required=True,
-                        help="Label for the distance metric, e.g. 'ot', 'mmd', 'fid'. Assumed to be the same across all subplots.")
-    parser.add_argument('--x_label_prefix', type=str, default="GeoSpOT Distance",
-                        help="Prefix for each subplot's x-axis label; the embedding name is appended in parentheses, "
-                             "e.g. 'GeoSpOT Distance (GeoCLIP)'.")
-    parser.add_argument('--results_file', type=str, required=True,
-                        help="Path to the combined transfer-performance results CSV (long format with src_domain_idx/tgt_domain_idx columns).")
-    parser.add_argument('--metric', type=str, default='avg_test_acc',
-                        help="Column in results_file to use as the y-axis (e.g. avg_test_acc, avg_test_top3_acc, avg_test_top5_acc).")
-    parser.add_argument('--output_dir', type=str, default='./trend_plots',
-                        help="Directory to save the plot in.")
-    parser.add_argument('--rescale_acc', action='store_true',
-                        help="Rescale the metric as the relative (%%) change from each source domain's self-pair value.")
-    parser.add_argument('--mask_domains', type=int, nargs='*', default=[],
-                        help="Domain indices to exclude from both src and tgt.")
-    parser.add_argument('--outlier_domains', type=int, nargs='*', default=[],
-                        help="Additional domain indices considered outliers, excluded from both src and tgt "
-                             f"(domain {ALWAYS_EXCLUDED_DOMAINS[0]}, e.g. Panama for geoyfcc_text, is always "
-                             "excluded regardless of this flag). Self pairs (src==tgt) are also always excluded.")
-    parser.add_argument('--figsize', type=float, nargs=2, default=(18, 11),
-                        help="Figure size as 'width height' for the whole (multi-panel) figure.")
+    parser.add_argument('--distance_files', type=str, nargs='+', required=True, help="Paths to square N x N distance matrix CSVs, one per subplot, e.g. an OT distance matrix for GeoCLIP followed by one for SatCLIP.")
+    parser.add_argument('--embedding_types', type=str, nargs='+', required=True, choices=list(EMBEDDING_LABELS), help="Embedding type per distance file, used to color each subplot and label its x-axis.")
+    parser.add_argument('--distance_type', type=str, required=True, help="Label for the distance metric, e.g. 'ot', 'mmd', 'fid'. Assumed to be the same across all subplots.")
+    parser.add_argument('--x_label_prefix', type=str, default="GeoSpOT Distance", help="Prefix for each subplot's x-axis label; the embedding name is appended in parentheses, e.g. 'GeoSpOT Distance (GeoCLIP)'.")
+    parser.add_argument('--results_file', type=str, required=True, help="Path to the combined transfer-performance results CSV (long format with src_domain_idx/tgt_domain_idx columns).")
+    parser.add_argument('--metric', type=str, default='avg_test_acc', help="Column in results_file to use as the y-axis (e.g. avg_test_acc, avg_test_top3_acc, avg_test_top5_acc).")
+    parser.add_argument('--output_dir', type=str, default='./trend_plots', help="Directory to save the plot in.")
+    parser.add_argument('--rescale_acc', action='store_true', help="Rescale the metric as the relative (%%) change from each source domain's self-pair value.")
+    parser.add_argument('--mask_domains', type=int, nargs='*', default=[], help="Domain indices to exclude from both src and tgt.")
+    parser.add_argument('--outlier_domains', type=int, nargs='*', default=[], help="Additional domain indices considered outliers, excluded from both src and tgt "
+                         f"(domain {ALWAYS_EXCLUDED_DOMAINS[0]}, e.g. Panama for geoyfcc_text, is always excluded regardless of this flag). Self pairs (src==tgt) are also always excluded.")
+    parser.add_argument('--figsize', type=float, nargs=2, default=(18, 11), help="Figure size as 'width height' for the whole (multi-panel) figure.")
 
     args = parser.parse_args()
     if len(args.embedding_types) != len(args.distance_files):

@@ -13,6 +13,13 @@ matrices on disk are sinkhorn and others sinkhorn_log -- picking "newest" would 
 rho values computed under different OT solvers. Only sinkhorn_log results are used (see
 find_ot_sinkhorn_log_file); if an embedding doesn't have one yet, it falls back to the legacy
 old_results/*_max_per_domain.csv matrix and flags that in the yielded `note`.
+
+For each location-based embedding (geoclip, satclip, geodesic), OT is additionally computed on
+the combined embedding `{location}+bert` = lambda * location + (1 - lambda) * bert, swept over
+lambda (see experiments/16_compute_combined_ot_distances_lambda_sweep.sh and
+find_ot_lambda_combo_files); iter_available_combos yields one combo per lambda value found on
+disk, labelled with embedding_type f"{location}+bert" and the lambda value in the 6th element of
+the yielded tuple.
 """
 
 import os
@@ -23,6 +30,10 @@ DATA_ROOT = Path("data")
 
 EMBEDDING_TYPES = ["bert", "geoclip", "satclip", "geodesic"]
 DISTANCE_TYPES = ["cosine", "mmd", "ot", "fid", "geodesic"]
+
+# Location-based embeddings that also have a `{location}+bert` combined-OT lambda sweep on disk
+# (see experiments/16_compute_combined_ot_distances_lambda_sweep.sh).
+LOCATION_EMBEDDING_TYPES = ["geoclip", "satclip", "geodesic"]
 
 # Preference order when a distance type has been computed under multiple ground metrics.
 MMD_METRIC_PRIORITY = ["euclidean", "geodesic", "cosine"]
@@ -38,10 +49,8 @@ def find_distance_file(dataset, distance_type, embedding_type):
 
     if distance_type == "geodesic":
         # Embedding-agnostic: only meaningful paired with embedding_type "geodesic" itself.
-        if embedding_type != "geodesic":
-            return None
         f = dist_dir / "geodesic_avg_distance.csv"
-        return f if f.exists() else None
+        return f if embedding_type == "geodesic" and f.exists() else None
 
     if distance_type == "cosine":
         f = dist_dir / f"cosine_{embedding_type}_avg_similarity.csv"
@@ -85,11 +94,28 @@ def find_ot_sinkhorn_log_file(dataset, embedding_type):
     return None, ""
 
 
+def find_ot_lambda_combo_files(dataset, location_embedding_type):
+    """Return a list of (lambda_value, Path), sorted by lambda, for the sinkhorn_log OT distance
+    matrices of the combined embedding f"{location_embedding_type}+bert" (lambda * location +
+    (1 - lambda) * bert), swept over lambda -- see
+    experiments/16_compute_combined_ot_distances_lambda_sweep.sh."""
+    dist_dir = DATA_ROOT / dataset / "distances" / "ot_distance"
+    embedding_type = f"{location_embedding_type}+bert"
+    matches = dist_dir.glob(
+        f"ot_distance_matrix_{embedding_type}_all_combinations_method_sinkhorn_log_*_lambda_*.csv")
+
+    results = [(float(m.group(1)), f) for f in matches if (m := re.search(r"_lambda_([0-9.]+)\.csv$", f.name))]
+    return sorted(results, key=lambda pair: pair[0])
+
+
 def iter_available_combos(dataset, embedding_types, distance_types):
-    """Yield (embedding_type, distance_type, distance_file, method, note) for every combo with a
-    resolvable distance file; prints a warning and skips combos that aren't computed yet.
-    method is only meaningful for distance_type "ot" (always "sinkhorn_log" -- see
-    find_ot_sinkhorn_log_file); note flags when an OT row is a fallback to old_results."""
+    """Yield (embedding_type, distance_type, distance_file, method, note, lambda_weight) for
+    every combo with a resolvable distance file; prints a warning and skips combos that aren't
+    computed yet. method is only meaningful for distance_type "ot" (always "sinkhorn_log" -- see
+    find_ot_sinkhorn_log_file); note flags when an OT row is a fallback to old_results.
+    lambda_weight is only set for the f"{location}+bert" combined-OT lambda sweep (see
+    find_ot_lambda_combo_files); it is None for every other combo, including the plain
+    (non-combined) OT distance for a location embedding."""
     for embedding_type in embedding_types:
         for distance_type in distance_types:
             if distance_type == "geodesic" and embedding_type != "geodesic":
@@ -100,10 +126,20 @@ def iter_available_combos(dataset, embedding_types, distance_types):
                 if distance_file is None:
                     print(f"[WARNING] No sinkhorn_log ot distance file (or old_results fallback) "
                           f"found for embedding={embedding_type}, skipping")
-                    continue
-                if note:
-                    print(f"[NOTE] {embedding_type}/ot: {note} ({distance_file})")
-                yield embedding_type, distance_type, distance_file, "sinkhorn_log", note
+                else:
+                    if note:
+                        print(f"[NOTE] {embedding_type}/ot: {note} ({distance_file})")
+                    yield embedding_type, distance_type, distance_file, "sinkhorn_log", note, None
+
+                if embedding_type in LOCATION_EMBEDDING_TYPES:
+                    combo_embedding_type = f"{embedding_type}+bert"
+                    combo_files = find_ot_lambda_combo_files(dataset, embedding_type)
+                    if not combo_files:
+                        print(f"[WARNING] No sinkhorn_log ot distance files found for combined "
+                              f"embedding {combo_embedding_type} (lambda sweep), skipping")
+                    for lambda_value, combo_file in combo_files:
+                        yield (combo_embedding_type, distance_type, combo_file, "sinkhorn_log",
+                               "", lambda_value)
                 continue
 
             distance_file = find_distance_file(dataset, distance_type, embedding_type)
@@ -111,4 +147,4 @@ def iter_available_combos(dataset, embedding_types, distance_types):
                 print(f"[WARNING] No {distance_type} distance file found for "
                       f"embedding={embedding_type}, skipping")
                 continue
-            yield embedding_type, distance_type, distance_file, None, ""
+            yield embedding_type, distance_type, distance_file, None, "", None

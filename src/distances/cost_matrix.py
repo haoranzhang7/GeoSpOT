@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 import ot
@@ -21,15 +22,12 @@ def compute_cost_matrix(src_embeddings, tgt_embeddings, metric: str):
         src_norm = src_embeddings / src_embeddings.norm(dim=1, keepdim=True)
         tgt_norm = tgt_embeddings / tgt_embeddings.norm(dim=1, keepdim=True)
         return 1 - torch.matmul(src_norm, tgt_norm.T)
-
     if metric == "geodesic":
         if src_embeddings.shape[1] != 2 or tgt_embeddings.shape[1] != 2:
             raise ValueError(f"Geodesic requires 2D coords, got src: {src_embeddings.shape[1]}, tgt: {tgt_embeddings.shape[1]}")
         return haversine_distance(src_embeddings, tgt_embeddings)
-
     if metric == "euclidean":
         return torch.cdist(src_embeddings, tgt_embeddings)
-
     return ot.dist(src_embeddings, tgt_embeddings, metric=metric)
 
 
@@ -75,10 +73,25 @@ def load_cost_constants(data_root, dataset_name, embedding_type, metric):
 def compute_and_cache_cost_constants(data_root, dataset_name, embedding_type, metric, embeddings):
     """Compute global pairwise min/max cost over `embeddings` and cache it to disk."""
     min_val, max_val = pairwise_minmax(embeddings, embeddings, metric)
-
     path = cost_constants_cache_path(data_root, dataset_name, embedding_type, metric)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w') as f:
         json.dump({'cost_min': float(min_val), 'cost_max': float(max_val)}, f, indent=2)
-
     return max_val, min_val
+
+
+def build_normalize_args(data_root, args, embeddings):
+    """Build the normalize_cost_matrix args namespace, fetching/caching global constants if needed."""
+    ns = SimpleNamespace(normalize_cost=args.normalize_cost, max_constant=None, min_constant=None)
+    if args.normalize_cost in ("max", "minmax"):
+        cached = load_cost_constants(str(data_root), args.dataset, args.embedding_type, args.metric)
+        if cached is None:
+            if args.metric == "geodesic":
+                raise FileNotFoundError(
+                    f"No cached geodesic cost constants found for dataset={args.dataset}. "
+                    "Run ot_distance.py with --embedding-type geodesic first to generate them.")
+            print(f"Computing global {args.metric} cost constants for normalization...")
+            cached = compute_and_cache_cost_constants(str(data_root), args.dataset, args.embedding_type,
+                                                       args.metric, embeddings)
+        ns.max_constant, ns.min_constant = cached
+    return ns

@@ -8,7 +8,6 @@ Example:
 
 import argparse, sys
 from pathlib import Path
-from types import SimpleNamespace
 import numpy as np, pandas as pd, torch
 from scipy import linalg
 from tqdm import tqdm
@@ -17,8 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.distances.utils import DATA_ROOT, load_embeddings_and_domains, get_embs
-from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matrix,
-                                        load_cost_constants, compute_and_cache_cost_constants)
+from src.distances.cost_matrix import compute_cost_matrix, normalize_cost_matrix, build_normalize_args
 
 
 def stats(features):
@@ -37,15 +35,11 @@ def mean_dist(mu1, mu2, metric="cosine", normalize_args=None):
 
 def fid(mu1, sigma1, mu2, sigma2, metric="cosine", normalize_args=None):
     mean_term = mean_dist(mu1, mu2, metric, normalize_args) ** 2
-    
-    # Compute the matrix square root of the covariance product.
-    # This is equivalent (under the trace) to
+    # Matrix square root of the covariance product; equivalent (under the trace) to
     # (Sigma1^(1/2) Sigma2 Sigma1^(1/2))^(1/2) for PSD covariances.
     covmean = linalg.sqrtm(sigma1 @ sigma2)
-
     if np.iscomplexobj(covmean):
         covmean = covmean.real
-
     return mean_term + np.trace(sigma1 + sigma2 - 2 * covmean)
 
 
@@ -74,10 +68,7 @@ def cached_fid(cache_dir, src, tgt, compute_fn, force_recompute=False):
 def compute_fid_matrix(embeddings, domains, active, n, max_samples, device, metric="cosine",
                         normalize_args=None, cache_dir=None, force_recompute=False):
     matrix = np.full((n, n), np.nan)
-    domain_stats = {}
-    for idx in active:
-        feats = get_embs(embeddings, domains, idx, max_samples, device).cpu().numpy()
-        domain_stats[idx] = stats(feats)
+    domain_stats = {idx: stats(get_embs(embeddings, domains, idx, max_samples, device).cpu().numpy()) for idx in active}
 
     for src in tqdm(active, desc="src domain", unit="domain"):
         src_mu, src_sig = domain_stats[src]
@@ -92,37 +83,13 @@ def compute_fid_matrix(embeddings, domains, active, n, max_samples, device, metr
     return matrix
 
 
-def build_normalize_args(args, embeddings):
-    """Build the normalize_cost_matrix args namespace, fetching/caching global constants if needed."""
-    ns = SimpleNamespace(normalize_cost=args.normalize_cost, max_constant=None, min_constant=None)
-    if args.normalize_cost in ("max", "minmax"):
-        cached = load_cost_constants(str(DATA_ROOT), args.dataset, args.embedding_type, args.metric)
-        if cached is None:
-            if args.metric == "geodesic":
-                raise FileNotFoundError(
-                    f"No cached geodesic cost constants found for dataset={args.dataset}. "
-                    "Run ot_distance.py with --embedding-type geodesic first to generate them."
-                )
-            print(f"Computing global {args.metric} cost constants for normalization...")
-            cached = compute_and_cache_cost_constants(str(DATA_ROOT), args.dataset, args.embedding_type,
-                                                       args.metric, embeddings)
-        ns.max_constant, ns.min_constant = cached
-    return ns
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", default="geoyfcc_text", choices=["geoyfcc_text", "fmow", "geoyfcc_image"])
     p.add_argument("--total-domains", type=int, default=62)
     p.add_argument("--embedding-type", default="bert")
-    p.add_argument("--metric", default="cosine", choices=["euclidean", "cosine", "geodesic"],
-                   help="Distance used for the mean term (diff @ diff); 'geodesic' requires 2D "
-                        "[lat, lon] embeddings. The covariance/trace term is unaffected.")
-    p.add_argument("--normalize-cost", default="none", choices=["none", "max", "minmax"],
-                   help="Normalize the mean-term distance before squaring it, the same way OT "
-                        "normalizes its cost matrix (see cost_matrix.normalize_cost_matrix). "
-                        "'max_per_domain' is not supported for FID: unlike OT/MMD, FID has no full "
-                        "sample-pairwise distance matrix to take a per-pair max over.")
+    p.add_argument("--metric", default="cosine", choices=["euclidean", "cosine", "geodesic"], help="Distance used for the mean term (diff @ diff); 'geodesic' requires 2D [lat, lon] embeddings. The covariance/trace term is unaffected.")
+    p.add_argument("--normalize-cost", default="none", choices=["none", "max", "minmax"], help="Normalize the mean-term distance before squaring it, the same way OT normalizes its cost matrix (see cost_matrix.normalize_cost_matrix). 'max_per_domain' is not supported for FID: unlike OT/MMD, FID has no full sample-pairwise distance matrix to take a per-pair max over.")
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--force-recompute", action="store_true", help="Recompute even if a cached pair distance exists")
@@ -140,8 +107,7 @@ def main():
     active = [i for i in range(n) if (domains == i).sum() > 0]
     print(f"{len(active)} non-empty domains, {len(active) * (len(active) - 1)} pairs to compute")
 
-    normalize_args = build_normalize_args(args, embeddings)
-
+    normalize_args = build_normalize_args(DATA_ROOT, args, embeddings)
     matrix = compute_fid_matrix(embeddings, domains, active, n, args.max_samples, device,
                                  metric=args.metric, normalize_args=normalize_args,
                                  cache_dir=cache_dir, force_recompute=args.force_recompute)

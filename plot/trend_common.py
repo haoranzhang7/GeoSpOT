@@ -35,8 +35,14 @@ EMBEDDING_COLORS = {
 
 
 def load_distance_matrix(distance_file, distance_type):
-    """Load a square N x N distance matrix CSV (rows/cols = domain indices) into long format."""
+    """Load a square N x N distance matrix CSV (rows/cols = domain indices) into long format.
+
+    OT matrices (see save_k1_matrix in src/distances/ot_distance.py) may carry an extra pooled
+    "all" source row used for global subset selection; it has no matching target column, so it's
+    dropped here before casting the index/columns to int.
+    """
     matrix = pd.read_csv(distance_file, index_col=0)
+    matrix = matrix.drop(index="all", errors="ignore").drop(columns="all", errors="ignore")
     matrix.index = matrix.index.astype(int)
     matrix.columns = matrix.columns.astype(int)
 
@@ -50,10 +56,7 @@ def load_distance_matrix(distance_file, distance_type):
 def rescale_metric(results_df, metric):
     """Rescale metric as the relative (%) change from each target domain's own self-pair value:
     (Acc_tgt(M_src) - Acc_tgt(M_tgt)) / Acc_tgt(M_tgt) * 100."""
-    self_pair_values = results_df.loc[
-        results_df['src_domain_idx'] == results_df['tgt_domain_idx']
-    ].set_index('tgt_domain_idx')[metric]
-
+    self_pair_values = results_df.loc[results_df['src_domain_idx'] == results_df['tgt_domain_idx']].set_index('tgt_domain_idx')[metric]
     baseline = results_df['tgt_domain_idx'].map(self_pair_values)
     rescaled = results_df.copy()
     rescaled[metric] = (results_df[metric] - baseline) * 100 / baseline
@@ -78,10 +81,7 @@ def exclude_domains(combined_df, domain_indices):
     """Drop pairs where src or tgt domain idx is in domain_indices."""
     if not domain_indices:
         return combined_df
-    return combined_df[
-        ~combined_df['src_domain_idx'].isin(domain_indices) &
-        ~combined_df['tgt_domain_idx'].isin(domain_indices)
-    ]
+    return combined_df[~combined_df['src_domain_idx'].isin(domain_indices) & ~combined_df['tgt_domain_idx'].isin(domain_indices)]
 
 
 def build_combined_df(distance_file, distance_type, results_df, mask_domains, outlier_domains,
@@ -120,8 +120,7 @@ def scatter_regplot(ax, df, x_title, y_title, color, *, show_ylabel=True, show_p
     for spine in ('top', 'right'):
         ax.spines[spine].set_visible(False)
     for spine in ('left', 'bottom'):
-        ax.spines[spine].set_color('#333333')
-        ax.spines[spine].set_linewidth(1.1)
+        ax.spines[spine].set(color='#333333', linewidth=1.1)
 
     alpha_value = 0.15 if len(df) > 50 else 0.4
     ax.scatter(df[scatter_x], df[scatter_y], s=38, alpha=alpha_value, color=scatter_color,

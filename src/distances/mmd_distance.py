@@ -1,11 +1,8 @@
 #!/usr/bin/env python
-"""
-Run MMD baseline distances. Saves an N×N matrix CSV (rows=src, cols=tgt).
-"""
+"""Run MMD baseline distances. Saves an N×N matrix CSV (rows=src, cols=tgt)."""
 
 import argparse, gc, sys
 from pathlib import Path
-from types import SimpleNamespace
 import numpy as np, pandas as pd, torch
 from tqdm import tqdm
 
@@ -13,49 +10,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.distances.utils import DATA_ROOT, load_embeddings_and_domains, get_embs
-from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matrix,
-                                        load_cost_constants, compute_and_cache_cost_constants)
+from src.distances.cost_matrix import compute_cost_matrix, build_normalize_args
 
 
 def metric_dist(X, Y, metric="cosine"):
     """Pairwise distance matrix (not squared), optionally normalized the same way OT normalizes its cost matrix."""
-    dist = compute_cost_matrix(X, Y, metric)
-    return dist
+    return compute_cost_matrix(X, Y, metric)
 
 
 def gaussian_kernel(X, Y, sigma=1.0, metric="cosine", **kernel_kwargs):
-    """
-    Returns kernel matrix K where:
-    K_ij = exp(-d(x_i, y_j)^2 / (2 sigma^2))
-    """
-    dist2 = metric_dist(X, Y, metric) ** 2
-    return torch.exp(-dist2 / (2 * sigma ** 2))
+    """K_ij = exp(-d(x_i, y_j)^2 / (2 sigma^2))"""
+    return torch.exp(-metric_dist(X, Y, metric) ** 2 / (2 * sigma ** 2))
 
 def linear_kernel(X, Y):
-    """
-    K_ij = x_i · y_j
-    """
+    """K_ij = x_i . y_j"""
     return X @ Y.T
 
 def mmd(X, Y, kernel_fn, **kernel_kwargs):
-    """
-    Computes the MMD distance between two sets of samples X and Y using the specified kernel function.
-    """
-    
-    K_xx = kernel_fn(X, X, **kernel_kwargs)
-    K_yy = kernel_fn(Y, Y, **kernel_kwargs)
-    K_xy = kernel_fn(X, Y, **kernel_kwargs)
-
+    """MMD distance between two sets of samples X and Y using the specified kernel function."""
+    K_xx, K_yy, K_xy = kernel_fn(X, X, **kernel_kwargs), kernel_fn(Y, Y, **kernel_kwargs), kernel_fn(X, Y, **kernel_kwargs)
     normalize_args = kernel_kwargs.get("normalize_args")
     if normalize_args is not None and normalize_args.normalize_cost.startswith("max_per_domain"):
-        normalization_constant = max(K_xx.max(), K_yy.max(), K_xy.max())
-        K_xx = K_xx / normalization_constant
-        K_yy = K_yy / normalization_constant
-        K_xy = K_xy / normalization_constant
-
-    return (K_xx.mean()
-            + K_yy.mean()
-            - 2 * K_xy.mean())
+        c = max(K_xx.max(), K_yy.max(), K_xy.max())
+        K_xx, K_yy, K_xy = K_xx / c, K_yy / c, K_xy / c
+    return K_xx.mean() + K_yy.mean() - 2 * K_xy.mean()
 
 
 def median_heuristic_sigma(X, Y, max_samples=2000, metric="cosine", normalize_args=None):
@@ -63,8 +41,7 @@ def median_heuristic_sigma(X, Y, max_samples=2000, metric="cosine", normalize_ar
     if len(Z) > max_samples:
         Z = Z[torch.randperm(len(Z))[:max_samples]]
     dists = metric_dist(Z, Z, metric)
-    mask = ~torch.eye(len(Z), dtype=torch.bool, device=Z.device)
-    return dists[mask].median().item()
+    return dists[~torch.eye(len(Z), dtype=torch.bool, device=Z.device)].median().item()
 
 
 def calculate_mmd(X, Y, kernel="multiscale", sigma=None, scales=(0.1, 0.5, 1.0, 2.0, 5.0),
@@ -77,23 +54,17 @@ def calculate_mmd(X, Y, kernel="multiscale", sigma=None, scales=(0.1, 0.5, 1.0, 
     normalize_args: optional namespace with .normalize_cost/.max_constant/.min_constant, applied to the
     distance matrix the same way OT normalizes its cost matrix (see cost_matrix.normalize_cost_matrix).
     """
-    if not isinstance(X, torch.Tensor):
-        X = torch.tensor(X, dtype=torch.float32)
-    if not isinstance(Y, torch.Tensor):
-        Y = torch.tensor(Y, dtype=torch.float32)
+    X = X if isinstance(X, torch.Tensor) else torch.tensor(X, dtype=torch.float32)
+    Y = Y if isinstance(Y, torch.Tensor) else torch.tensor(Y, dtype=torch.float32)
 
     if kernel == "linear":
         return mmd(X, Y, linear_kernel)
-
     base_sigma = sigma if sigma is not None else median_heuristic_sigma(X, Y, metric=metric, normalize_args=normalize_args)
-
     if kernel == "gaussian":
         return mmd(X, Y, gaussian_kernel, sigma=base_sigma, metric=metric, normalize_args=normalize_args)
-
     if kernel == "multiscale":
         return sum(mmd(X, Y, gaussian_kernel, sigma=base_sigma * s, metric=metric, normalize_args=normalize_args)
                    for s in scales)
-
     raise ValueError(f"Unknown kernel: {kernel}")
 
 
@@ -132,37 +103,14 @@ def compute_mmd_matrix(embeddings, domains, active, n, kernel, sigma, max_sample
     return matrix
 
 
-def build_normalize_args(args, embeddings):
-    """Build the normalize_cost_matrix args namespace, fetching/caching global constants if needed."""
-    ns = SimpleNamespace(normalize_cost=args.normalize_cost, max_constant=None, min_constant=None)
-    if args.normalize_cost in ("max", "minmax"):
-        cached = load_cost_constants(str(DATA_ROOT), args.dataset, args.embedding_type, args.metric)
-        if cached is None:
-            if args.metric == "geodesic":
-                raise FileNotFoundError(
-                    f"No cached geodesic cost constants found for dataset={args.dataset}. "
-                    "Run ot_distance.py with --embedding-type geodesic first to generate them."
-                )
-            print(f"Computing global {args.metric} cost constants for normalization...")
-            cached = compute_and_cache_cost_constants(str(DATA_ROOT), args.dataset, args.embedding_type,
-                                                       args.metric, embeddings)
-        ns.max_constant, ns.min_constant = cached
-    return ns
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", default="geoyfcc_text", choices=["geoyfcc_text", "fmow", "geoyfcc_image"])
     p.add_argument("--total-domains", type=int, default=62)
     p.add_argument("--embedding-type", default="bert")
     p.add_argument("--kernel", default="multiscale", choices=["multiscale", "gaussian", "linear"])
-    p.add_argument("--metric", default="cosine", choices=["euclidean", "cosine", "geodesic"],
-                   help="Distance used inside the Gaussian kernel (ignored for kernel=linear). "
-                        "'geodesic' requires 2D [lat, lon] embeddings.")
-    p.add_argument("--normalize-cost", default="none",
-                   choices=["none", "max", "minmax", "max_per_domain", "max_per_domain_and_normalized_after"],
-                   help="Normalize the pairwise distance matrix before squaring it into the kernel, "
-                        "the same way OT normalizes its cost matrix (see cost_matrix.normalize_cost_matrix).")
+    p.add_argument("--metric", default="cosine", choices=["euclidean", "cosine", "geodesic"], help="Distance used inside the Gaussian kernel (ignored for kernel=linear). 'geodesic' requires 2D [lat, lon] embeddings.")
+    p.add_argument("--normalize-cost", default="none", choices=["none", "max", "minmax", "max_per_domain", "max_per_domain_and_normalized_after"], help="Normalize the pairwise distance matrix before squaring it into the kernel, the same way OT normalizes its cost matrix (see cost_matrix.normalize_cost_matrix).")
     p.add_argument("--sigma", type=float, default=None)
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--device", type=str, default="cuda")
@@ -181,8 +129,7 @@ def main():
     active = [i for i in range(n) if (domains == i).sum() > 0]
     print(f"{len(active)} non-empty domains, {len(active) * (len(active) - 1)} pairs to compute")
 
-    normalize_args = build_normalize_args(args, embeddings)
-
+    normalize_args = build_normalize_args(DATA_ROOT, args, embeddings)
     matrix = compute_mmd_matrix(embeddings, domains, active, n, args.kernel, args.sigma, args.max_samples, device,
                                  metric=args.metric, normalize_args=normalize_args,
                                  cache_dir=cache_dir, force_recompute=args.force_recompute)

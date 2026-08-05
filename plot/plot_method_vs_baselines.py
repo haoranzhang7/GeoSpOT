@@ -12,11 +12,9 @@ budget, with the budget appended to the filename (e.g. foo.png -> foo_N2000.png,
 foo_N5000.png, ...).
 """
 
-import os
-import argparse
+import os, argparse
 
-import pandas as pd
-import numpy as np
+import pandas as pd, numpy as np
 import matplotlib.pyplot as plt
 
 plt.rcParams['font.family'] = 'Times New Roman'
@@ -76,12 +74,12 @@ def plot(df, domains, out_path):
                     x[method_idx] + K_DODGE[k], row['value_est'], yerr=row['std_est'],
                     fmt=K_MARKERS[k], color=METHOD_COLORS[method], ecolor=METHOD_COLORS[method],
                     elinewidth=3.5, capsize=8, capthick=3.5, markersize=22,
-                    markeredgecolor='white', markeredgewidth=2, zorder=3,
-                )
+                    markeredgecolor='white', markeredgewidth=2, zorder=3)
                 barlinecol.set_capstyle('round')
 
         global_row = domain_df[domain_df['method'] == 'global'].iloc[0]
-        ax.axhspan(global_row['value_est'] - global_row['std_est'], global_row['value_est'] + global_row['std_est'], color=GLOBAL_COLOR, alpha=0.15, zorder=1)
+        ax.axhspan(global_row['value_est'] - global_row['std_est'], global_row['value_est'] + global_row['std_est'],
+                   color=GLOBAL_COLOR, alpha=0.15, zorder=1)
         ax.axhline(global_row['value_est'], color=GLOBAL_COLOR, linestyle='--', linewidth=3, zorder=2, label=r'global ($K=\infty$)')
 
         ax.set_xticks(x)
@@ -93,18 +91,11 @@ def plot(df, domains, out_path):
 
     axes[0].set_ylabel('Test Accuracy on Target domain')
 
-    k_handles = [
-        plt.Line2D(
-            [0], [0], marker=K_MARKERS[k], linestyle='None', markersize=22, label=rf'$K={k}$',
-            markerfacecolor='none', markeredgecolor='dimgray', markeredgewidth=3.5,
-        )
-        for k in K_ORDER
-    ]
+    k_handles = [plt.Line2D([0], [0], marker=K_MARKERS[k], linestyle='None', markersize=22, label=rf'$K={k}$',
+                             markerfacecolor='none', markeredgecolor='dimgray', markeredgewidth=3.5) for k in K_ORDER]
     baseline_handles, baseline_labels = axes[-1].get_legend_handles_labels()
-    fig.legend(
-        handles=k_handles + baseline_handles, labels=[h.get_label() for h in k_handles] + baseline_labels,
-        loc='upper center', ncol=5, bbox_to_anchor=(0.5, 1.1), frameon=True,
-    )
+    fig.legend(handles=k_handles + baseline_handles, labels=[h.get_label() for h in k_handles] + baseline_labels,
+               loc='upper center', ncol=5, bbox_to_anchor=(0.5, 1.1), frameon=True)
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(out_path), exist_ok=True)

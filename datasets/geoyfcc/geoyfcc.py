@@ -188,17 +188,24 @@ class GeoYFCCText(GeoYFCCBase):
             print(f"[INFO] Loaded {len(self.df)} single-label samples from filtered file")
             self.num_classes = 1261
         else:
-            # Initialize parent class
-            super().__init__(root, metadata_file, domain_idx, expand_multilabel=expand_multilabel)
-            
-            self.filter_text_enabled = filter_missing_text
-            self.apply_text_filter()
+            # Initialize parent class without expanding multi-label rows yet.
+            # Splits must be assigned per-photo (before expansion) so that every
+            # label belonging to the same photo ends up in the same split --
+            # expanding first would let a photo's labels get shuffled independently
+            # into different splits, leaking the same image across train/val.
+            super().__init__(root, metadata_file, domain_idx, expand_multilabel=False)
 
-            # CHANGED: Only set split if 'split' column doesn't exist
+            # Only set split if 'split' column doesn't exist
             if 'split' not in self.df.columns or self.df['split'].isna().any():
                 self.set_split()
             else:
                 print(f"[INFO] Using existing 'split' column from CSV")
+
+            if expand_multilabel:
+                self._expand_to_single_label()
+
+            self.filter_text_enabled = filter_missing_text
+            self.apply_text_filter()
 
             self.save_filtered_enabled = save_filtered
             self.save_filtered_dataset()

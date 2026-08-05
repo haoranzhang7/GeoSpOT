@@ -19,11 +19,9 @@ def _combine_cost_matrices(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args
 
 def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_args1, cost_args2, ot_args) -> float:
     combined_ab = _combine_cost_matrices(src_emb1, tgt_emb1, src_emb2, tgt_emb2, cost_args1, cost_args2, ot_args)
-
     a = uniform_weights(combined_ab.shape[0], combined_ab.device)
     b = uniform_weights(combined_ab.shape[1], combined_ab.device)
     ot_ab = solve_ot(a, b, combined_ab, ot_args)
-
     if not ot_args.debiased:
         return ot_ab
 
@@ -44,7 +42,6 @@ def compute_combined_distance(args, src_data, tgt_domain_indices, data_source, d
     emb_type_1, emb_type_2 = embedding_type.split("+")
     tgt_emb_1 = torch.cat([domain_slice(data_source[emb_type_1], domains_source[emb_type_1], idx) for idx in tgt_domain_indices])
     tgt_emb_2 = torch.cat([domain_slice(data_source[emb_type_2], domains_source[emb_type_2], idx) for idx in tgt_domain_indices])
-
     cost_args_1, cost_args_2 = copy.copy(args), copy.copy(args)
     cost_args_1.metric = "geodesic" if emb_type_1 == "geodesic" else args.metric
     cost_args_1.max_constant, cost_args_1.min_constant = max_const[emb_type_1], min_const[emb_type_1]

@@ -29,12 +29,8 @@ from src.distances.cost_matrix import haversine_distance
 
 def avg_geodesic_distance(src_coords, tgt_coords, batch_size=5000):
     n_src, n_tgt = len(src_coords), len(tgt_coords)
-    total = 0.0
-    for i in range(0, n_src, batch_size):
-        batch_i = src_coords[i:i + batch_size]
-        for j in range(0, n_tgt, batch_size):
-            batch_j = tgt_coords[j:j + batch_size]
-            total += haversine_distance(batch_i, batch_j).sum().item()
+    total = sum(haversine_distance(src_coords[i:i + batch_size], tgt_coords[j:j + batch_size]).sum().item()
+                for i in range(0, n_src, batch_size) for j in range(0, n_tgt, batch_size))
     return total / (n_src * n_tgt)
 
 

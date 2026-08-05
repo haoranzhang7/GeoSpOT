@@ -20,11 +20,9 @@ Example:
 import argparse
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd
 
-from latex_table_common import DATASET_LABELS, EMBEDDING_LABELS, DISTANCE_LABELS, \
-    build_dataset_embedding_table, write_and_print
+from latex_table_common import DATASET_LABELS, EMBEDDING_LABELS, DISTANCE_LABELS, build_dataset_embedding_table, write_and_print
 
 DATA_ROOT = Path("data")
 
@@ -59,11 +57,9 @@ def summarize_matrix(dataset, embedding_type, distance_type):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datasets", nargs="+", default=["geoyfcc_text"], choices=list(DATASET_LABELS))
-    parser.add_argument("--embedding-types", nargs="+", default=["bert", "geoclip", "satclip"],
-                         choices=list(EMBEDDING_LABELS))
+    parser.add_argument("--embedding-types", nargs="+", default=["bert", "geoclip", "satclip"], choices=list(EMBEDDING_LABELS))
     parser.add_argument("--distance-types", nargs="+", default=["ot", "mmd", "fid"], choices=list(DISTANCE_LABELS))
-    parser.add_argument("--caption", default="Mean $\\pm$ std cross-domain distance under each metric, for "
-                                              "text (BERT) vs.\\ location (GeoCLIP, SatCLIP) embeddings.")
+    parser.add_argument("--caption", default="Mean $\\pm$ std cross-domain distance under each metric, for text (BERT) vs.\\ location (GeoCLIP, SatCLIP) embeddings.")
     parser.add_argument("--label", default="tab:distance_comparison")
     parser.add_argument("--out", default="plot/plots/tables/distance_comparison.tex")
     args = parser.parse_args()

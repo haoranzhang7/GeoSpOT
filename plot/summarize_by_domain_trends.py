@@ -9,8 +9,7 @@ Example:
   python plot/summarize_by_domain_trends.py --plots_dir plot/plots --output_file plot/plots/by_domain_trend_summary.csv
 """
 
-import argparse
-import os
+import argparse, os
 
 import pandas as pd
 
@@ -33,16 +32,9 @@ def main(args):
                     continue
 
                 df = pd.read_csv(csv_path)
-                rows.append({
-                    'embedding_type': embedding_type,
-                    'distance_type': distance_type,
-                    'direction': direction,
-                    'rho_mean': df['rho'].mean(),
-                    'rho_std': df['rho'].std(),
-                    'r2_mean': df['r2'].mean(),
-                    'r2_std': df['r2'].std(),
-                    'n_domains': len(df),
-                })
+                rows.append({'embedding_type': embedding_type, 'distance_type': distance_type, 'direction': direction,
+                             'rho_mean': df['rho'].mean(), 'rho_std': df['rho'].std(),
+                             'r2_mean': df['r2'].mean(), 'r2_std': df['r2'].std(), 'n_domains': len(df)})
 
     summary_df = pd.DataFrame(rows)
     os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
@@ -52,8 +44,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--plots_dir', type=str, default='plot/plots',
-                         help="Root directory containing per-embedding subfolders with a by_domain/ folder.")
+    parser.add_argument('--plots_dir', type=str, default='plot/plots', help="Root directory containing per-embedding subfolders with a by_domain/ folder.")
     parser.add_argument('--embedding_types', type=str, nargs='+', default=EMBEDDING_TYPES)
     parser.add_argument('--distance_types', type=str, nargs='+', default=DISTANCE_TYPES)
     parser.add_argument('--output_file', type=str, default='plot/plots/by_domain_trend_summary.csv')

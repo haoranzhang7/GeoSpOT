@@ -43,13 +43,8 @@ METHODS = [
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--direction", default="src", choices=["src", "tgt", "both"],
-                         help="Which fixed-domain regressions to pool rho values from: 'src' (fix source "
-                              "domain, vary target; default), 'tgt' (fix target, vary source), or 'both'.")
-    parser.add_argument("--caption", default="Mean $\\pm$ std of $|\\rho|$ (Spearman correlation between "
-                                              "OT domain distance and downstream transfer accuracy, across "
-                                              "fixed-source-domain regressions) for content embeddings "
-                                              "(BERT/ResNet50) vs. GeoSpOT's location embeddings.")
+    parser.add_argument("--direction", default="src", choices=["src", "tgt", "both"], help="Which fixed-domain regressions to pool rho values from: 'src' (fix source domain, vary target; default), 'tgt' (fix target, vary source), or 'both'.")
+    parser.add_argument("--caption", default="Mean $\\pm$ std of $|\\rho|$ (Spearman correlation between OT domain distance and downstream transfer accuracy, across fixed-source-domain regressions) for content embeddings (BERT/ResNet50) vs. GeoSpOT's location embeddings.")
     parser.add_argument("--label", default="tab:rho_by_dataset")
     parser.add_argument("--out", default="plot/plots/tables/rho_by_dataset.tex")
     args = parser.parse_args()
@@ -57,13 +52,9 @@ def main():
     directions = ("src", "tgt") if args.direction == "both" else (args.direction,)
 
     header = ["Method"] + [DATASET_LABELS[d] for d in DATASETS]
-    rows = []
-    for method_label, embedding_by_dataset in METHODS:
-        cells = [method_label]
-        for dataset in DATASETS:
-            value = summarize_abs_rho(plots_root_for(dataset), embedding_by_dataset[dataset], "ot", directions)
-            cells.append(format_mean_std_cell(value))
-        rows.append(cells)
+    rows = [[method_label] + [format_mean_std_cell(summarize_abs_rho(plots_root_for(d), embedding_by_dataset[d], "ot", directions))
+                               for d in DATASETS]
+            for method_label, embedding_by_dataset in METHODS]
 
     latex = to_latex(header, rows, args.caption, args.label)
     write_and_print(latex, args.out)

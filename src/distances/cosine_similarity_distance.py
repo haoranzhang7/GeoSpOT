@@ -33,10 +33,7 @@ def mean_normalized_vector(features):
 
 def compute_avg_cosine_similarity_matrix(embeddings, domains, active, n, max_samples, device):
     matrix = np.full((n, n), np.nan)
-    domain_dirs = {}
-    for idx in active:
-        feats = get_embs(embeddings, domains, idx, max_samples, device)
-        domain_dirs[idx] = mean_normalized_vector(feats)
+    domain_dirs = {idx: mean_normalized_vector(get_embs(embeddings, domains, idx, max_samples, device)) for idx in active}
 
     for src in active:
         for tgt in active:

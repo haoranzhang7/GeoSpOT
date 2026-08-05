@@ -22,25 +22,17 @@ Example:
 
 import argparse
 
-from latex_table_common import DATASET_LABELS, EMBEDDING_LABELS, DISTANCE_LABELS, \
-    build_dataset_embedding_table, write_and_print
+from latex_table_common import DATASET_LABELS, EMBEDDING_LABELS, DISTANCE_LABELS, build_dataset_embedding_table, write_and_print
 from trend_summary_common import plots_root_for, summarize_abs_rho
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--datasets", nargs="+", default=["geoyfcc_text"], choices=list(DATASET_LABELS))
-    parser.add_argument("--embedding-types", nargs="+", default=["bert", "geoclip", "satclip"],
-                         choices=list(EMBEDDING_LABELS))
+    parser.add_argument("--embedding-types", nargs="+", default=["bert", "geoclip", "satclip"], choices=list(EMBEDDING_LABELS))
     parser.add_argument("--distance-types", nargs="+", default=["ot", "mmd", "fid"], choices=list(DISTANCE_LABELS))
-    parser.add_argument("--direction", default="both", choices=["src", "tgt", "both"],
-                         help="Which fixed-domain regressions to pool rho values from: 'src' (fix source "
-                              "domain, vary target), 'tgt' (fix target, vary source), or 'both' (pool both "
-                              "sets of per-domain rho values together).")
-    parser.add_argument("--caption", default="Mean $\\pm$ std of $|\\rho|$ (Spearman correlation between "
-                                              "domain distance and downstream transfer accuracy, across "
-                                              "fixed-domain regressions) for text (BERT) vs.\\ location "
-                                              "(GeoCLIP, SatCLIP) embeddings.")
+    parser.add_argument("--direction", default="both", choices=["src", "tgt", "both"], help="Which fixed-domain regressions to pool rho values from: 'src' (fix source domain, vary target), 'tgt' (fix target, vary source), or 'both' (pool both sets of per-domain rho values together).")
+    parser.add_argument("--caption", default="Mean $\\pm$ std of $|\\rho|$ (Spearman correlation between domain distance and downstream transfer accuracy, across fixed-domain regressions) for text (BERT) vs.\\ location (GeoCLIP, SatCLIP) embeddings.")
     parser.add_argument("--label", default="tab:rho_comparison")
     parser.add_argument("--out", default="plot/plots/tables/rho_comparison.tex")
     args = parser.parse_args()

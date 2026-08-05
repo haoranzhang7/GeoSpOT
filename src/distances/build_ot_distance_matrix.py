@@ -8,12 +8,10 @@ Example:
   python src/distances/build_ot_distance_matrix.py --dataset geoyfcc_text --embedding-type bert
 """
 
-import argparse
-import sys
+import argparse, sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -54,9 +52,7 @@ def main():
         raise ValueError("build_ot_distance_matrix.py only supports k=1 (one target domain per source file).")
 
     metric = "geodesic" if args.embedding_type == "geodesic" else args.metric
-    config_suffix = (f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_"
-                      f"metric_{metric}_norm_{args.normalize_cost}")
-
+    config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric}_norm_{args.normalize_cost}"
     source_dir = DATA_ROOT / args.dataset / "distances" / "ot_distance"
     n = args.total_domains
     matrix = build_ot_matrix(source_dir, args.embedding_type, args.k, config_suffix, n)
