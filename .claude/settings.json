@@ -10,7 +10,17 @@
       "Bash(python plot/build_overall_rho_csv.py --dataset geoyfcc_text)",
       "Bash(python3 -c \"print\\(len\\(open\\('src/distances/ot_distance.py'\\).read\\(\\).split\\(chr\\(10\\)\\)\\)\\)\")",
       "Bash(python3 -m py_compile src/distances/*.py)",
-      "Bash(python3 -m py_compile plot/*.py src/distances/*.py)"
+      "Bash(python3 -m py_compile plot/*.py src/distances/*.py)",
+      "Bash(find / -maxdepth 6 -iname \"*SatOT*\")",
+      "Bash(find / -maxdepth 3 -iname \"*geospot*\")",
+      "Bash(cat)",
+      "Read(//dev/**)",
+      "Bash(bash -n /home/libe2152/projects/GeoSpOT/experiments/12_subset_selection_all_target_slurm.sh)",
+      "Bash(conda env *)",
+      "Read(//curc/sw/**)",
+      "Bash(chmod +x /home/libe2152/projects/GeoSpOT/experiments/test.sh)",
+      "Bash(bash -n /home/libe2152/projects/GeoSpOT/experiments/test.sh)",
+      "Bash(python src/training/pretrain_by_domain_subset.py --help)"
     ]
   }
 }
