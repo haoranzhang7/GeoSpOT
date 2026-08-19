@@ -20,7 +20,24 @@
       "Read(//curc/sw/**)",
       "Bash(chmod +x /home/libe2152/projects/GeoSpOT/experiments/test.sh)",
       "Bash(bash -n /home/libe2152/projects/GeoSpOT/experiments/test.sh)",
-      "Bash(python src/training/pretrain_by_domain_subset.py --help)"
+      "Bash(python src/training/pretrain_by_domain_subset.py --help)",
+      "Bash(dmesg -T)",
+      "Bash(ulimit -a)",
+      "Bash(hostname; echo *)",
+      "Read(//projects/libe2152/**)",
+      "Read(//scratch/alpine/libe2152/**)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=5 c3cpu-c15-u32-1 \"hostname\")",
+      "Bash(python3 -m py_compile src/core/subset_selection.py src/distances/ot_distance.py)",
+      "Bash(cp data/geoyfcc_text/distances/ot_distance/distances_k2_satclip_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_cosine_norm_max_per_domain.csv /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/backup_distances_k2_satclip.csv)",
+      "Bash(python3 -c \"import torch, ot, pandas; print\\('torch', torch.__version__, 'cuda', torch.cuda.is_available\\(\\)\\); print\\('pot', ot.__version__\\)\")",
+      "Bash(cd /home/libe2152/projects/GeoSpOT *)",
+      "Bash(cp data/geoyfcc_text/distances/ot_distance/ot_distance_matrix_geodesic_all_combinations_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/backup_ot_matrix_geodesic_k1.csv)",
+      "Bash(mv data/geoyfcc_text/distances/ot_distance/ot_distance_matrix_geodesic_all_combinations_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/moved_aside_ot_matrix_geodesic_k1.csv)",
+      "Bash(cp /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/moved_aside_ot_matrix_geodesic_k1.csv data/geoyfcc_text/distances/ot_distance/ot_distance_matrix_geodesic_all_combinations_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv)",
+      "Bash(cp /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/moved_aside_distances_k2_satclip.csv data/geoyfcc_text/distances/ot_distance/distances_k2_satclip_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_cosine_norm_max_per_domain.csv)"
+    ],
+    "additionalDirectories": [
+      "/home/libe2152/projects/GeoSpOT/data/geoyfcc_text/distances/ot_distance"
     ]
   }
 }

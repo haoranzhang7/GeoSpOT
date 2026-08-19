@@ -227,7 +227,7 @@ def create_result_record(embedding_type, tgt_domain_indices, distance, source_do
         record["lambda"] = lambda_param
     return record
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Compute OT distances for GeoYFCC dataset")
     parser.add_argument("--data-root", type=str, default="./data", help="Root data directory")
     parser.add_argument("--dataset-name", type=str, default="geoyfcc_text", help="Dataset folder name under the data root")
@@ -250,7 +250,7 @@ def parse_args():
     parser.add_argument("--lambda-values", type=str, default=None, help="Comma-separated lambda values to loop over within this process (combined embeddings only), reusing loaded embeddings. Overrides --lambda.")
     parser.add_argument("--greedy-sequential", action="store_true", help="Use greedy sequential domain selection instead of all combinations")
     parser.add_argument("--force-recompute", action="store_true", help="Force recomputation even if cached results exist")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 def run_all_combinations(args, src_data, data_source, domains_source, all_domain_indices, embedding_type,
                           max_const, min_const, source_domain_idx, k, lambda_param):

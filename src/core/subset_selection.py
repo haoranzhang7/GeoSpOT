@@ -1,4 +1,5 @@
 from typing import Tuple, List, Sequence, Optional, Dict, Any
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import os
@@ -12,6 +13,32 @@ sys.path.append(os.path.join(os.getcwd(), '..'))
 sys.path.append(os.path.join(os.getcwd(), '../..'))
 
 from src.data.load_datasets import get_domain_split_mask
+from src.distances import ot_distance as otd
+
+
+def _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains):
+    """Drive ot_distance.py's own functions to compute+save the CSV _select_best_ot_combination expects."""
+    ot_dir_path = Path(str(ot_dir).rstrip('/'))  # ot_dir == <data_root>/<dataset_name>/distances/ot_distance
+    args = otd.parse_args([
+        "--data-root", str(ot_dir_path.parent.parent.parent), "--dataset-name", ot_dir_path.parent.parent.name,
+        "--embedding-type", embedding_type, "--source-domain-idx", str(source_domain_idx), "--k", str(num_domains),
+        "--method", ot_method, "--reg-e", str(reg), "--max-iter", str(iters), "--metric", metric,
+        "--normalize-cost", norm,
+    ] + (["--greedy-sequential"] if num_domains > 1 else []))
+
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    src_idx = "all" if source_domain_idx == "all" else int(source_domain_idx)
+    metric_to_use = "geodesic" if embedding_type == "geodesic" else args.metric
+    config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric_to_use}_norm_{args.normalize_cost}"
+
+    src_data, data_source, domains_source, max_const, min_const = otd.load_source_data(args, device, src_idx, embedding_type)
+    run_fn, method_suffix = (otd.run_greedy_sequential, "greedy") if num_domains > 1 else (otd.run_all_combinations, "all_combinations")
+    fn_args = (args, src_data, list(range(args.total_domains)), data_source, domains_source, embedding_type, max_const, min_const, src_idx, num_domains, args.lambda_param) \
+        if num_domains > 1 else (args, src_data, data_source, domains_source, list(range(args.total_domains)), embedding_type, max_const, min_const, src_idx, num_domains, args.lambda_param)
+    records = run_fn(*fn_args)
+
+    otd.save_records(records, otd.get_result_dir(args), src_idx, num_domains, args.total_domains, embedding_type, method_suffix, config_suffix)
+    otd.cleanup_source_data(src_data, None)
 
 
 def _select_best_ot_combination(
@@ -54,7 +81,10 @@ def _select_best_ot_combination(
     prefix = f"ot_distance_matrix_{embedding_type}" if num_domains == 1 else f"distances_k{num_domains}_{embedding_type}"
     csv_path = os.path.join(ot_dir, f"{prefix}_{config_suffix}.csv")
     if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"OT distances file not found: {csv_path}")
+        print(f"[OT] Distances file not found, computing now: {csv_path}")
+        _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains)
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"OT distances file still not found after attempting to compute it: {csv_path}")
 
     if num_domains == 1:
         row = pd.read_csv(csv_path, index_col=0)
