@@ -37,7 +37,8 @@
       "Bash(cp /tmp/claude-1101285/-home-libe2152-projects-GeoSpOT/bc9986e8-5e0a-46e7-bc1b-f1b93749fde4/scratchpad/moved_aside_distances_k2_satclip.csv data/geoyfcc_text/distances/ot_distance/distances_k2_satclip_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_cosine_norm_max_per_domain.csv)"
     ],
     "additionalDirectories": [
-      "/home/libe2152/projects/GeoSpOT/data/geoyfcc_text/distances/ot_distance"
+      "/home/libe2152/projects/GeoSpOT/data/geoyfcc_text/distances/ot_distance",
+      "/home/libe2152/projects/GeoSpOT/logs"
     ]
   }
 }
