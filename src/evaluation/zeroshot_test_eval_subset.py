@@ -124,6 +124,7 @@ SUMMARY_COLUMNS = [
     "ot_iter",
     "ot_metric",
     "ot_norm",
+    "ot_lambda",
     "acc",
     "num_data",
     "num_correct",
@@ -212,6 +213,7 @@ def build_summary_row(dataset_name, target_domain_idx, target_domain_label, subs
         "ot_iter": subset_params.get('ot_iter'),
         "ot_metric": subset_params.get('ot_metric'),
         "ot_norm": subset_params.get('ot_norm'),
+        "ot_lambda": subset_params.get('ot_lambda'),
         "acc": stats.get("acc"),
         "num_data": stats.get("num_data"),
         "num_correct": stats.get("num_correct"),
@@ -415,6 +417,8 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
                 checkpoint_parts.append(f"K{subset_params['num_domains']}")
                 if subset_params.get('domain_selection_method') == 'ot':
                     checkpoint_parts.append(f"OT_{subset_params['ot_embedding_type']}_{subset_params.get('ot_method', 'sinkhorn_log')}_{subset_params.get('ot_reg', '0.01')}_{subset_params.get('ot_iter', '1000')}_{subset_params.get('ot_metric', 'cosine')}_{subset_params.get('ot_norm', 'max')}")
+                    if subset_params.get('ot_lambda') is not None:
+                        checkpoint_parts.append(f"lambda{float(subset_params['ot_lambda'])}")
                 else:
                     checkpoint_parts.append(subset_params['domain_selection_method'])
             if subset_params.get('val_subset_size'):
@@ -536,6 +540,9 @@ if __name__ == '__main__':
     parser.add_argument('--ot_iter', type=str, help='OT iterations (if OT method used)')
     parser.add_argument('--ot_metric', type=str, help='OT metric (if OT method used)')
     parser.add_argument('--ot_norm', type=str, help='OT normalization (if OT method used)')
+    parser.add_argument('--ot_lambda', type=str,
+                        help="Lambda weight used for combined embedding types (e.g., 0.5 with "
+                             "--ot_embedding_type geoclip+bert)")
     parser.add_argument('--val_subset_size', type=int, help='Validation subset size V used for training')
     parser.add_argument('--tgt_domain', type=str,
                         help="Target domain used for training. Pass an int, or 'all' if training targeted the "
@@ -557,6 +564,7 @@ if __name__ == '__main__':
         'ot_iter': args.ot_iter,
         'ot_metric': args.ot_metric,
         'ot_norm': args.ot_norm,
+        'ot_lambda': args.ot_lambda,
         'val_subset_size': args.val_subset_size,
         'tgt_domain': args.tgt_domain
     }

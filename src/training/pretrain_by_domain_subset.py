@@ -126,6 +126,10 @@ class PretrainSubsetTrainer(BasePretrainTrainer):
             parts.append(f"_K{self.num_domains}")
             if self.domain_selection_method == 'ot':
                 parts.append(f"_OT_{self.ot_params['embedding_type']}_{self.ot_params['method']}_{self.ot_params['reg']}_{self.ot_params['iter']}_{self.ot_params['metric']}_{self.ot_params['norm']}")
+                if self.ot_params.get('lambda') is not None:
+                    # float() so "0.50" and "0.5" name the same checkpoint, matching how
+                    # zeroshot_test_eval_subset.py rebuilds this filename.
+                    parts.append(f"_lambda{float(self.ot_params['lambda'])}")
             else:
                 parts.append(f"_{self.domain_selection_method}")
         if self.val_subset_size is not None:
@@ -288,6 +292,7 @@ def main(args):
             'iter': args.ot_iter or '1000',
             'metric': args.ot_metric or 'cosine',
             'norm': args.ot_norm or 'max',
+            'lambda': args.ot_lambda,
         }
 
     trainer = PretrainSubsetTrainer(
@@ -346,4 +351,7 @@ if __name__ == '__main__':
     parser.add_argument('--ot_iter', type=str, default=None, help='OT iterations (e.g., 1000)')
     parser.add_argument('--ot_metric', type=str, default=None, help='OT metric (e.g., cosine)')
     parser.add_argument('--ot_norm', type=str, default=None, help='OT normalization (e.g., max)')
+    parser.add_argument('--ot_lambda', type=str, default=None,
+                        help="Lambda weight for combined embedding types (e.g., 0.5 with "
+                             "--ot_embedding_type geoclip+bert). Ignored for single embedding types.")
     main(parser.parse_args())

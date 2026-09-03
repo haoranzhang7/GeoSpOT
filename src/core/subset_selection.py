@@ -16,7 +16,7 @@ from src.data.load_datasets import get_domain_split_mask
 from src.distances import ot_distance as otd
 
 
-def _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains):
+def _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains, lambda_param=None):
     """Drive ot_distance.py's own functions to compute+save the CSV _select_best_ot_combination expects."""
     ot_dir_path = Path(str(ot_dir).rstrip('/'))  # ot_dir == <data_root>/<dataset_name>/distances/ot_distance
     args = otd.parse_args([
@@ -24,12 +24,15 @@ def _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_
         "--embedding-type", embedding_type, "--source-domain-idx", str(source_domain_idx), "--k", str(num_domains),
         "--method", ot_method, "--reg-e", str(reg), "--max-iter", str(iters), "--metric", metric,
         "--normalize-cost", norm,
-    ] + (["--greedy-sequential"] if num_domains > 1 else []))
+    ] + (["--lambda", str(lambda_param)] if lambda_param is not None else [])
+      + (["--greedy-sequential"] if num_domains > 1 else []))
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     src_idx = "all" if source_domain_idx == "all" else int(source_domain_idx)
     metric_to_use = "geodesic" if embedding_type == "geodesic" else args.metric
     config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric_to_use}_norm_{args.normalize_cost}"
+    if "+" in embedding_type and args.lambda_param is not None:
+        config_suffix += f"_lambda_{args.lambda_param}"
 
     src_data, data_source, domains_source, max_const, min_const = otd.load_source_data(args, device, src_idx, embedding_type)
     run_fn, method_suffix = (otd.run_greedy_sequential, "greedy") if num_domains > 1 else (otd.run_all_combinations, "all_combinations")
@@ -64,6 +67,10 @@ def _select_best_ot_combination(
     iters = ot_params.get('iter') or '1000'
     metric = ot_params.get('metric') or 'cosine'
     norm = ot_params.get('norm') or 'max'
+    # Combined embedding types ('geoclip+bert', ...) weight the two per-type cost matrices by
+    # lambda, and ot_distance.py stamps that into the filename. Normalize through float() so the
+    # suffix matches byte-for-byte regardless of how the value was spelled on the command line.
+    lambda_param = float(ot_params['lambda']) if ot_params.get('lambda') is not None else None
 
     if None in [ot_dir, source_domain_idx, embedding_type, num_domains]:
         raise ValueError("Missing required OT parameters: ot_distance_dir, source_domain_idx, embedding_type, method, reg, iter, metric, norm, num_domains")
@@ -78,11 +85,13 @@ def _select_best_ot_combination(
     num_domains = int(num_domains)
     method_suffix = "greedy" if num_domains > 1 else "all_combinations"
     config_suffix = f"{method_suffix}_method_{ot_method}_reg_{reg}_iter_{iters}_metric_{metric}_norm_{norm}"
+    if "+" in embedding_type and lambda_param is not None:
+        config_suffix += f"_lambda_{lambda_param}"
     prefix = f"ot_distance_matrix_{embedding_type}" if num_domains == 1 else f"distances_k{num_domains}_{embedding_type}"
     csv_path = os.path.join(ot_dir, f"{prefix}_{config_suffix}.csv")
     if not os.path.exists(csv_path):
         print(f"[OT] Distances file not found, computing now: {csv_path}")
-        _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains)
+        _compute_missing_ot_distances(ot_dir, source_domain_idx, embedding_type, ot_method, reg, iters, metric, norm, num_domains, lambda_param)
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"OT distances file still not found after attempting to compute it: {csv_path}")
 
