@@ -80,7 +80,7 @@ def eval_vision(model, dataloader, device):
     total_top5_correct = 0
 
     with torch.no_grad():
-        for batch_data in dataloader:
+        for batch_data in tqdm(dataloader, desc="Eval Batches", leave=False):
             # Handle both 2-tuple and 3-tuple formats (FMoW/GeoYFCCImage return 3-tuple)
             if len(batch_data) == 3:
                 inputs, labels, metadata = batch_data
@@ -154,7 +154,7 @@ def eval_multilabel_text(model, dataloader, device):
     top5_correct = 0
 
     with torch.no_grad():
-        for encodings, labels in dataloader:
+        for encodings, labels in tqdm(dataloader, desc="Eval Batches", leave=False):
             input_ids = encodings["input_ids"].to(device)
             attention_mask = encodings["attention_mask"].to(device)
             labels = labels.to(device).float()
@@ -269,20 +269,20 @@ def eval_text(model, dataloader, device):
     top5_correct = 0
 
     with torch.no_grad():
-        for model_input, labels in dataloader:
+        for model_input, labels in tqdm(dataloader, desc="Eval Batches", leave=False):
             labels = labels.to(device).long()
 
             input_ids = model_input["input_ids"].to(device)
             attention_mask = model_input["attention_mask"].to(device)
             logits = model(input_ids, attention_mask)
-            
+
             # Calculate top-k accuracies
             topk_acc = calculate_topk_accuracy(logits, labels, [1, 3, 5])
             correct_predictions += topk_acc['top1']
             top3_correct += topk_acc['top3']
             top5_correct += topk_acc['top5']
             total_predictions += labels.size(0)
-            
+
             torch.cuda.empty_cache()
 
     accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0

@@ -47,12 +47,19 @@ from src.core.utils import (
 
 
 
-def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_size, 
-                         generator, model_data_seed):
-    """Setup test dataloader for target domain."""
-    
+def setup_test_dataloader(dataset_name, dataset, target_domain_idx, eval_batch_size,
+                         generator, model_data_seed, test_subset_size=None):
+    """Setup test dataloader for target domain, optionally subsampled to test_subset_size."""
+
     test_mask = get_domain_split_mask(dataset_name, dataset, target_domain_idx, split='test')
-    
+
+    if test_subset_size is not None:
+        test_indices = np.where(test_mask)[0]
+        if test_subset_size < len(test_indices):
+            chosen = np.random.RandomState(42).choice(test_indices, size=test_subset_size, replace=False)
+            test_mask = np.zeros_like(test_mask)
+            test_mask[chosen] = True
+
     # Create worker init function with model_data_seed
     worker_init_fn = functools.partial(seed_worker, model_seed=model_data_seed)
     
@@ -118,6 +125,7 @@ SUMMARY_COLUMNS = [
     "train_model",
     "model_seed",
     "spatial_splits",
+    "test_subset_size",
     "ot_embedding_type",
     "ot_method",
     "ot_reg",
@@ -192,7 +200,7 @@ def append_summary_row(summary_csv_path, row):
 
 
 def build_summary_row(dataset_name, target_domain_idx, target_domain_label, subset_params,
-                      model_name, spatial_split_types, model_seed, stats):
+                      model_name, spatial_split_types, model_seed, stats, test_subset_size=None):
     """Create dictionary ready for CSV writing."""
     timestamp = datetime.datetime.utcnow().isoformat()
     select_by = subset_params.get('domain_selection_method') or 'unknown'
@@ -207,6 +215,7 @@ def build_summary_row(dataset_name, target_domain_idx, target_domain_label, subs
         "train_model": model_name,
         "model_seed": model_seed,
         "spatial_splits": spatial_split_types,
+        "test_subset_size": test_subset_size,
         "ot_embedding_type": subset_params.get('ot_embedding_type'),
         "ot_method": subset_params.get('ot_method'),
         "ot_reg": subset_params.get('ot_reg'),
@@ -225,11 +234,11 @@ def build_summary_row(dataset_name, target_domain_idx, target_domain_label, subs
     return row
 
 
-def save_results(results_all_seed, results_all_seed_with_preds, target_domain_idx, 
+def save_results(results_all_seed, results_all_seed_with_preds, target_domain_idx,
                 task_name, spatial_split_types, model_name, subset_params,
-                CSV_DIR, JSON_DIR, PKL_DIR, logger):
+                CSV_DIR, JSON_DIR, PKL_DIR, logger, test_subset_size=None):
     """Save results to CSV, JSON, and pickle files with subset-specific naming."""
-    
+
     # Create subset suffix for filenames
     subset_suffix = ""
     if subset_params.get('subset_size'):
@@ -238,7 +247,9 @@ def save_results(results_all_seed, results_all_seed_with_preds, target_domain_id
         subset_suffix += f"_K{subset_params['num_domains']}_{subset_params['domain_selection_method']}"
     if subset_params.get('ot_embedding_type'):
         subset_suffix += f"_{subset_params['ot_embedding_type']}"
-    
+    if test_subset_size is not None:
+        subset_suffix += f"_test{test_subset_size}"
+
     # Save CSV
     csv_filename = f"{task_name}_{spatial_split_types}_{model_name}_subset{subset_suffix}_tgt{target_domain_idx}.csv"
     csv_filepath = os.path.join(CSV_DIR, csv_filename)
@@ -269,8 +280,14 @@ def save_results(results_all_seed, results_all_seed_with_preds, target_domain_id
     logger.info(f"Finish saving pickle to {pkl_filepath}")
 
 
-def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
-    """Main evaluation function for subset models."""
+def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
+         dataset=None, shared_dataloaders=None, logger=None):
+    """Main evaluation function for subset models.
+
+    dataset/shared_dataloaders/logger let a caller amortize dataset loading and
+    test dataloader construction across many subset_params configs (see
+    zeroshot_test_eval_subset_grid.py) instead of redoing both per config.
+    """
 
     task_name = "zeroshot_eval_subset"
     task_directory_name = "2_zeroshot_eval_subset"
@@ -313,22 +330,24 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
         model_name=model_name,
     )
 
-    # Setup logging
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_filename = f"{task_name}_{spatial_split_types}_{model_name}_subset{subset_suffix}_{timestamp}.log"
-    setup_logging(os.path.join(LOG_DIR, log_filename))
-    logger = logging.getLogger(__name__)
-    
-    print(f"Log stored at file logs/{log_filename}")
-    logger.info(f"Log stored at file logs/{log_filename}")
+    # Setup logging (skip if a shared logger was passed in by a grid caller)
+    if logger is None:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        log_filename = f"{task_name}_{spatial_split_types}_{model_name}_subset{subset_suffix}_{timestamp}.log"
+        setup_logging(os.path.join(LOG_DIR, log_filename))
+        logger = logging.getLogger(__name__)
+        print(f"Log stored at file logs/{log_filename}")
+        logger.info(f"Log stored at file logs/{log_filename}")
 
-    # Load dataset
-    print("Loading Dataset...")
-    logger.info("Loading Dataset...")
-    dataset = load_dataset(dataset_name, root_dir=args.data_dir)
+    # Load dataset (skip if a shared dataset was passed in by a grid caller)
+    if dataset is None:
+        print("Loading Dataset...")
+        logger.info("Loading Dataset...")
+        dataset = load_dataset(dataset_name, root_dir=args.data_dir)
 
     eval_batch_size = args.eval_batch_size
     model_data_seeds = args.seeds
+    test_subset_size = args.test_subset_size if args.test_subset_size is not None else subset_params.get('val_subset_size')
 
     # If tgt_domain is specified in subset_params, only evaluate on that domain
     # Otherwise, evaluate on all target_domain_idxs
@@ -351,7 +370,9 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
             subset_filename_suffix += f"_K{subset_params['num_domains']}_{subset_params['domain_selection_method']}"
         if subset_params.get('ot_embedding_type'):
             subset_filename_suffix += f"_{subset_params['ot_embedding_type']}"
-        
+        if test_subset_size is not None:
+            subset_filename_suffix += f"_test{test_subset_size}"
+
         csv_filename = f"{task_name}_{spatial_split_types}_{model_name}_subset{subset_filename_suffix}_tgt{target_domain_idx}.csv"
         csv_filepath = os.path.join(CSV_DIR, csv_filename)
 
@@ -438,13 +459,18 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
             print(f"Loading model {model_name} with seed {model_data_seed} from {checkpoint_savepath}...")
             model = load_pretrained_model(model, checkpoint_savepath, device)
 
-            print("Loading Test Dataloader for target domain...")
-            logger.info("Loading Test Dataloader for target domain...")
-            
-            test_dataloader = setup_test_dataloader(
-                dataset_name, dataset, target_domain_idx, eval_batch_size, g, model_data_seed
-            )
+            dataloader_key = (target_domain_idx, test_subset_size)
+            if shared_dataloaders is not None and dataloader_key in shared_dataloaders:
+                test_dataloader = shared_dataloaders[dataloader_key]
+            else:
+                print("Loading Test Dataloader for target domain...")
+                logger.info("Loading Test Dataloader for target domain...")
+                test_dataloader = setup_test_dataloader(
+                    dataset_name, dataset, target_domain_idx, eval_batch_size, g, model_data_seed,
+                    test_subset_size=test_subset_size
+                )
 
+            print("Running Eval...")
             test_preds, test_acc, test_top3_acc, test_top5_acc = eval(model, test_dataloader, device, model_name)
 
             result_with_preds = {
@@ -493,6 +519,7 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
                 spatial_split_types=spatial_split_types,
                 model_seed=model_data_seed,
                 stats=summary_stats,
+                test_subset_size=test_subset_size,
             )
             append_summary_row(summary_csv_path, summary_row)
 
@@ -509,7 +536,8 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None):
                 CSV_DIR,
                 JSON_DIR,
                 PKL_DIR,
-                logger
+                logger,
+                test_subset_size=test_subset_size,
             )
         else:
             print(f"No new results to save for target domain {target_domain_idx}")
@@ -527,6 +555,9 @@ if __name__ == '__main__':
     parser.add_argument('--results_root', default='./results/subset/test_results')
     parser.add_argument('--model', default='bert_singlelabel')
     parser.add_argument('--eval_batch_size', type=int, default=512)
+    parser.add_argument('--test_subset_size', type=int,
+                        help="Randomly subsample the test set to this many examples (seeded, so the same "
+                             "subset is reused across models). Defaults to the checkpoint's val_subset_size.")
     parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
     parser.add_argument('--summary_csv', type=str, help='Optional path to summary CSV file')
 
