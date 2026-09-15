@@ -59,7 +59,12 @@
       "Bash(python plot/build_subset_selection_csv.py)",
       "Bash(python3 -c \"import pandas\")",
       "Bash(bash -n /media/volume/adap-compress/projects/GeoSpOT/experiments/07_subset_selection.sh)",
-      "Bash(bash -n /media/volume/adap-compress/projects/GeoSpOT/experiments/07_subset_selection_slurm.sh)"
+      "Bash(bash -n /media/volume/adap-compress/projects/GeoSpOT/experiments/07_subset_selection_slurm.sh)",
+      "Bash(sed -E 's/^pretrain_countries_bert_singlelabel_\\(subset[0-9]+\\)_\\(K[0-9]+\\)_\\(random|OT\\).*/\\\\1 \\\\2 \\\\3/' /tmp/claude-1001/-media-volume-adap-compress-projects-GeoSpOT/ae985da7-1f16-4373-b4c1-2f433e7ba700/scratchpad/missing_models.txt)",
+      "Bash(bash -n experiments/07_subset_selection_slurm.sh)",
+      "Bash(awk '{print}')",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import torch; print\\(torch.cuda.is_available\\(\\)\\)\")"
     ],
     "additionalDirectories": [
       "/home/libe2152/projects/GeoSpOT/data/geoyfcc_text/distances/ot_distance",

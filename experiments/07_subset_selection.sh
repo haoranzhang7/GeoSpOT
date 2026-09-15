@@ -10,8 +10,8 @@ TARGET_DOMAINS=(57 12)
 K_VALUES=(1 2 5)
 BUDGET_VALUES=(2000 5000 10000)
 SEEDS=(6651033 9272605 1206448 2180968 114325)
-OT_EMBEDDING_TYPES=(bert geoclip satclip_L40 geodesic)
-LOCATION_EMBEDDINGS=(geoclip satclip_L40 geodesic)  # '+bert' pair order must match 16_...sh (it's in the CSV filename)
+OT_EMBEDDING_TYPES=(bert geoclip satclip geodesic)
+LOCATION_EMBEDDINGS=(geoclip satclip geodesic)  # '+bert' pair order must match 16_...sh (it's in the CSV filename)
 LAMBDA=0.5
 
 COMMON=(--dataset geoyfcc_text --domain_type countries --data_dir "$DATA_DIR"

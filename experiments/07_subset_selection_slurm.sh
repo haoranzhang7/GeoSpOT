@@ -14,8 +14,8 @@ conda activate geospot
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/..}"
 
 TARGETS=(57 12); K_VALUES=(1 2 5); BUDGET_VALUES=(2000 5000 10000); SEEDS=(6651033 9272605 1206448 2180968 114325)
-EMBS=(bert geoclip satclip_L40 geodesic)
-LOC_EMBS=(geoclip satclip_L40 geodesic); LAMBDA=0.5  # '+bert' pair order must match 16_...sh (it's in the CSV filename)
+EMBS=(bert geoclip satclip geodesic)
+LOC_EMBS=(geoclip satclip geodesic); LAMBDA=0.5  # '+bert' pair order must match 16_...sh (it's in the CSV filename)
 
 JOBS=()
 for tgt in "${TARGETS[@]}"; do for k in "${K_VALUES[@]}"; do for b in "${BUDGET_VALUES[@]}"; do
@@ -38,7 +38,23 @@ is_done() {
     grep -ql "Training completed in" "$dir"/pretrain_countries_bert_singlelabel${suf}_seed${s}_*.log 2>/dev/null
 }
 
+# Precompute every OT distance file the array below can need
+compute_distances() {
+    local tgt=$1 k=$2 emb=$3 lam=$4
+    local args=(--dataset-name geoyfcc_text --embedding-type "$emb" --source-domain-idx "$tgt"
+                --total-domains 62 --k "$k" --method sinkhorn_log --reg-e 0.01 --max-iter 1000
+                --metric cosine --normalize-cost max_per_domain)
+    [ "$k" -gt 1 ] && args+=(--greedy-sequential)
+    [ -n "$lam" ] && args+=(--lambda "$lam")
+    python src/distances/ot_distance.py "${args[@]}"
+}
+
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
+    for tgt in "${TARGETS[@]}"; do for k in "${K_VALUES[@]}"; do
+        for e in "${EMBS[@]}"; do compute_distances "$tgt" "$k" "$e" ""; done
+        for e in "${LOC_EMBS[@]}"; do compute_distances "$tgt" "$k" "${e}+bert" "$LAMBDA"; done
+    done; done
+
     IDX=()
     for i in "${!JOBS[@]}"; do read -r tgt k b s m e lam <<< "${JOBS[$i]}"; is_done "$tgt" "$k" "$b" "$s" "$m" "$e" "$lam" || IDX+=("$i"); done
     echo "${#IDX[@]}/${#JOBS[@]} jobs remaining"
