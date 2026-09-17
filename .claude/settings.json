@@ -110,7 +110,8 @@
       "Bash(/media/volume/adap-compress/miniconda3/envs/geospot/bin/python3 -c ' *)",
       "Bash(/media/volume/adap-compress/miniconda3/envs/geospot/bin/python3 experiments/check_subset_selection_data.py)",
       "Bash(mv data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv.bak)",
-      "Bash(mv data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv.bak data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv)"
+      "Bash(mv data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv.bak data/geoyfcc_text/distances/ot_distance/distances_k2_geodesic_greedy_method_sinkhorn_log_reg_0.01_iter_1000_metric_geodesic_norm_max_per_domain.csv)",
+      "Bash(bash experiments/test.sh)"
     ],
     "additionalDirectories": [
       "/home/libe2152/projects/GeoSpOT/data/geoyfcc_text/distances/ot_distance",
