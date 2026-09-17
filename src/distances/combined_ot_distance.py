@@ -4,7 +4,7 @@ import copy
 import torch
 
 from src.distances.cost_matrix import compute_cost_matrix, normalize_cost_matrix
-from src.distances.utils import uniform_weights, solve_ot, domain_slice
+from src.distances.utils import uniform_weights, solve_ot, combined_sinkhorn_log_chunked, domain_slice
 
 
 def _combine_cost_matrices(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args2, ot_args):
@@ -17,11 +17,19 @@ def _combine_cost_matrices(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args
     return combined
 
 
+def _combined_ot(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args2, ot_args) -> float:
+    """Dispatches to the chunked solver for sinkhorn_log (avoids materializing the full N x M
+    combined cost matrix), falling back to the plain dense solve for the other methods."""
+    if ot_args.method == "sinkhorn_log":
+        return combined_sinkhorn_log_chunked(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args2, ot_args)
+    combined = _combine_cost_matrices(emb1_x, emb1_y, emb2_x, emb2_y, cost_args1, cost_args2, ot_args)
+    a = uniform_weights(combined.shape[0], combined.device)
+    b = uniform_weights(combined.shape[1], combined.device)
+    return solve_ot(a, b, combined, ot_args)
+
+
 def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_args1, cost_args2, ot_args) -> float:
-    combined_ab = _combine_cost_matrices(src_emb1, tgt_emb1, src_emb2, tgt_emb2, cost_args1, cost_args2, ot_args)
-    a = uniform_weights(combined_ab.shape[0], combined_ab.device)
-    b = uniform_weights(combined_ab.shape[1], combined_ab.device)
-    ot_ab = solve_ot(a, b, combined_ab, ot_args)
+    ot_ab = _combined_ot(src_emb1, tgt_emb1, src_emb2, tgt_emb2, cost_args1, cost_args2, ot_args)
     if not ot_args.debiased:
         return ot_ab
 
@@ -29,10 +37,8 @@ def compute_combined_ot_distance(src_emb1, src_emb2, tgt_emb1, tgt_emb2, cost_ar
     # applied to the same lambda-weighted combined cost matrix used for the a-b term.
     # Caveat: with normalize_cost="max_per_domain" each per-type cost matrix is scaled by its
     # own local max, so the bias cancellation is only approximate (exact under "max"/"minmax").
-    combined_aa = _combine_cost_matrices(src_emb1, src_emb1, src_emb2, src_emb2, cost_args1, cost_args2, ot_args)
-    combined_bb = _combine_cost_matrices(tgt_emb1, tgt_emb1, tgt_emb2, tgt_emb2, cost_args1, cost_args2, ot_args)
-    ot_aa = solve_ot(a, a, combined_aa, ot_args)
-    ot_bb = solve_ot(b, b, combined_bb, ot_args)
+    ot_aa = _combined_ot(src_emb1, src_emb1, src_emb2, src_emb2, cost_args1, cost_args2, ot_args)
+    ot_bb = _combined_ot(tgt_emb1, tgt_emb1, tgt_emb2, tgt_emb2, cost_args1, cost_args2, ot_args)
     return ot_ab - 0.5 * (ot_aa + ot_bb)
 
 

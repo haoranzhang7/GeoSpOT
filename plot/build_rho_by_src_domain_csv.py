@@ -52,12 +52,18 @@ def main():
     parser.add_argument("--min_pairs", type=int, default=3, help="Minimum number of target domains needed to compute a given source domain's rho; source domains with fewer pairs are skipped.")
     parser.add_argument("--embedding_types", nargs="+", default=EMBEDDING_TYPES)
     parser.add_argument("--distance_types", nargs="+", default=DISTANCE_TYPES)
-    parser.add_argument("--out", default="plot/plots/rho_avg_by_src_domain.csv")
+    parser.add_argument("--out", default="plot/plots/rho_avg_by_src_domain.csv",
+                         help="Path for the aggregated (one row per embedding/distance combo) summary CSV.")
+    parser.add_argument("--detail_out", default="plot/plots/rho_by_src_domain_detail.csv",
+                         help="Path for the per-source-domain CSV (one row per src_domain x embedding/distance "
+                              "combo), e.g. for plot/print_rho_by_country.py to look up a single country without "
+                              "recomputing.")
     args = parser.parse_args()
 
     results_df = load_results(args.results_file, args.metric, args.rescale_acc)
 
     rows = []
+    detail_rows = []
     for embedding_type, distance_type, distance_file, method, note, lambda_weight in iter_available_combos(
             args.dataset, args.embedding_types, args.distance_types):
         try:
@@ -85,11 +91,22 @@ def main():
         print(f"{label}: rho_mean={per_domain['rho'].mean():.4f}, r2_mean={per_domain['r2'].mean():.4f} "
               f"(n_src_domains={len(per_domain)}, file={distance_file.name})")
 
+        per_domain = per_domain.assign(
+            dataset=args.dataset, embedding_type=embedding_type, distance_type=distance_type,
+            method=method or "", location_embedding=location_embedding, lambda_weight=lambda_weight)
+        detail_rows.append(per_domain)
+
     out_df = pd.DataFrame(rows)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(out_path, index=False)
     print(f"\nSaved {len(out_df)} rows to {out_path}")
+
+    detail_df = pd.concat(detail_rows, ignore_index=True) if detail_rows else pd.DataFrame()
+    detail_path = Path(args.detail_out)
+    detail_path.parent.mkdir(parents=True, exist_ok=True)
+    detail_df.to_csv(detail_path, index=False)
+    print(f"Saved {len(detail_df)} rows to {detail_path}")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ DATASET = "geoyfcc_text"
 rho_df = pd.read_csv("plot/plots/rho_overall.csv")
 rho_df = rho_df[(rho_df["dataset"] == DATASET) & (rho_df["distance_type"] == "ot")]
 
-fig, ax = plt.subplots(figsize=(5, 7))
+fig, ax = plt.subplots(figsize=(9, 9))
 bert_rho = rho_df.loc[rho_df["embedding_type"] == "bert", "abs_rho"].iloc[0]
 
 for location in LOCATION_EMBEDDING_TYPES:
@@ -23,15 +23,13 @@ for location in LOCATION_EMBEDDING_TYPES:
     lambdas = [0.0] + combo["lambda"].tolist() + [1.0]
     abs_rhos = [bert_rho] + combo["abs_rho"].tolist() + [location_rho]
     label = fr"$\lambda${EMBEDDING_LABELS[location]}+$(1-\lambda)${EMBEDDING_LABELS['bert']}"
-    ax.plot(lambdas, abs_rhos, marker="o", markersize=5, linewidth=2, color=EMBEDDING_COLORS[location], label=label)
+    ax.plot(lambdas, abs_rhos, marker="o", markersize=7, linewidth=3, color=EMBEDDING_COLORS[location], label=label)
 
 ax.set_xticks([i / 10 for i in range(11)])
 ax.set_xticklabels([f"{i / 10:.1f}" if i in (0, 5, 10) else "" for i in range(11)])
-ax.set_xlabel(r"Lambda ($\lambda$)", fontsize=20)
-ax.set_ylabel(r"Rank Correlation with $\Delta_{D_s,D_t}$", fontsize=20)
-ax.tick_params(axis="both", labelsize=16)
-ymin, ymax = ax.get_ylim()
-ax.set_ylim(ymin, ymax + 0.35 * (ymax - ymin))
-ax.legend(loc="upper right", fontsize=15, frameon=True)
+ax.set_xlabel(r"$\lambda$", fontsize=56)
+ax.set_ylabel(r"$|\rho|$", fontsize=56)
+ax.tick_params(axis="both", labelsize=44)
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.02), fontsize=40, frameon=True)
 fig.savefig("plot/plots/lambda_sweep_geoyfcc_text.png", bbox_inches="tight", dpi=300)
 print("Saved plot to plot/plots/lambda_sweep_geoyfcc_text.png")

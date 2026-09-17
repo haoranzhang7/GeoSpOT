@@ -129,6 +129,118 @@ def uniform_weights(n, device):
     return torch.ones(n, device=device) / n
 
 
+def _cache_blocks_if_small(cost, blocks, n, m, device, budget_gb=15.0):
+    """Caches every block once instead of recomputing cost(j0, j1) (e.g. the cosine matmul) on
+    every Sinkhorn iteration, when the full N x M matrix comfortably fits in memory."""
+    if device.type == "cpu" or n * m * 4 > budget_gb * 1e9:
+        return cost
+    cached = {(j0, j1): cost(j0, j1) for j0, j1 in blocks}
+    return lambda j0, j1: cached[(j0, j1)]
+
+
+def _sinkhorn_log_blocks(n, m, reg, device, cost, blocks, max_iter, stop_thr) -> float:
+    """Chunked log-domain Sinkhorn given a cost(j0, j1) -> (n, j1-j0) block function; shared by
+    sinkhorn_log_chunked and combined_sinkhorn_log_chunked so neither ever holds more than the
+    full N x M matrix at once (one (n, chunk_size) block at a time when that wouldn't fit)."""
+    cost = _cache_blocks_if_small(cost, blocks, n, m, device)
+    u, v = torch.zeros(n, device=device), torch.zeros(m, device=device)
+    log_a, log_b = -math.log(n), -math.log(m)  # uniform weights
+    for _ in range(max_iter):
+        prev_u = u
+        run_max, run_sum = torch.full((n,), -torch.inf, device=device), torch.zeros(n, device=device)
+        for j0, j1 in blocks:
+            # Each block's cost only depends on (src, tgt), not on u/v, so compute it once here
+            # and reuse it for both the v-update and the u-accumulation below (was computed twice).
+            c = cost(j0, j1)
+            v[j0:j1] = log_b - torch.logsumexp(-c / reg + u[:, None], dim=0)
+            vals = -c / reg + v[j0:j1]
+            new_max = torch.maximum(run_max, vals.max(dim=1).values)
+            run_sum = run_sum * torch.exp(run_max - new_max) + torch.exp(vals - new_max[:, None]).sum(dim=1)
+            run_max = new_max
+        u = log_a - (run_max + torch.log(run_sum))
+        if (u - prev_u).abs().max() < stop_thr:
+            break
+
+    return sum((torch.exp(-cost(j0, j1) / reg + u[:, None] + v[j0:j1]) * cost(j0, j1)).sum().item()
+                for j0, j1 in blocks)
+
+
+def _normalized_block_fn(src, tgt, metric, cost_args, blocks):
+    """Returns cost(j0, j1) equal to normalize_cost_matrix(compute_cost_matrix(src, tgt, metric),
+    cost_args)[:, j0:j1] -- i.e. normalized exactly as the full matrix would be -- computed one
+    block at a time. "max_per_domain" needs the *global* max, so blocks (each spanning all of src
+    and a slice of tgt that together partition tgt) are pre-scanned once for it; "max"/"minmax" use
+    cost_args' precomputed constants directly, no scan needed."""
+    from src.distances.cost_matrix import compute_cost_matrix, normalize_cost_matrix
+    dmax = (max(compute_cost_matrix(src, tgt[j0:j1], metric).max() for j0, j1 in blocks)
+            if cost_args.normalize_cost in ("max_per_domain", "max_per_domain_and_normalized_after") else None)
+
+    def cost(j0, j1):
+        c = compute_cost_matrix(src, tgt[j0:j1], metric)
+        return c / dmax if dmax is not None else normalize_cost_matrix(c, cost_args)
+
+    return cost
+
+
+def sinkhorn_log_chunked(src, tgt, metric, ot_args, chunk_size=4096) -> float:
+    """ot.sinkhorn2(method="sinkhorn_log"), but caps memory at O(N*chunk_size) by recomputing
+    (N, chunk_size) cost blocks instead of keeping the full N x M matrix in memory."""
+    n, m, device = src.shape[0], tgt.shape[0], src.device
+    blocks = [(j, min(j + chunk_size, m)) for j in range(0, m, chunk_size)]
+    cost = _normalized_block_fn(src, tgt, metric, ot_args, blocks)
+    return _sinkhorn_log_blocks(n, m, ot_args.reg_e, device, cost, blocks, ot_args.max_iter, ot_args.stop_thr)
+
+
+def combined_sinkhorn_log_chunked(src1, tgt1, src2, tgt2, cost_args1, cost_args2, ot_args, chunk_size=4096) -> float:
+    """Chunked counterpart of combined_ot_distance._combine_cost_matrices + solve_ot: lambda-weighted
+    sum of two per-embedding-type cost blocks, never materializing the full N x M combined matrix."""
+    n, m, device = src1.shape[0], tgt1.shape[0], src1.device
+    blocks = [(j, min(j + chunk_size, m)) for j in range(0, m, chunk_size)]
+    cost1 = _normalized_block_fn(src1, tgt1, cost_args1.metric, cost_args1, blocks)
+    cost2 = _normalized_block_fn(src2, tgt2, cost_args2.metric, cost_args2, blocks)
+
+    def combo(j0, j1):
+        return ot_args.lambda_param * cost1(j0, j1) + (1 - ot_args.lambda_param) * cost2(j0, j1)
+
+    # Same global-max reasoning as _normalized_block_fn's dmax, applied to the combined matrix.
+    dmax = max(combo(j0, j1).max() for j0, j1 in blocks) if ot_args.normalize_after else None
+    cost = (lambda j0, j1: combo(j0, j1) / dmax) if dmax is not None else combo
+
+    return _sinkhorn_log_blocks(n, m, ot_args.reg_e, device, cost, blocks, ot_args.max_iter, ot_args.stop_thr)
+
+
+def _check_sinkhorn_log_chunked_matches_reference():
+    """Sanity check: chunked result should match plain ot.sinkhorn2 up to solver tolerance."""
+    from types import SimpleNamespace
+    from src.distances.cost_matrix import compute_cost_matrix, normalize_cost_matrix
+    torch.manual_seed(0)
+    src, tgt = torch.rand(50, 8), torch.rand(130, 8)
+    args = SimpleNamespace(reg_e=0.05, max_iter=1000, stop_thr=1e-9, normalize_cost="max_per_domain")
+    cost = normalize_cost_matrix(compute_cost_matrix(src, tgt, "cosine"), args)
+    a, b = uniform_weights(50, "cpu"), uniform_weights(130, "cpu")
+    ref = _sinkhorn2(a, b, cost, "sinkhorn_log", args)
+    got = sinkhorn_log_chunked(src, tgt, "cosine", args, chunk_size=17)  # uneven chunk_size on purpose
+    assert abs(ref - got) < 1e-4, f"chunked sinkhorn diverged: ref={ref:.6f} got={got:.6f}"
+    print(f"OK: sinkhorn_log_chunked matches ot.sinkhorn2 (ref={ref:.6f}, got={got:.6f})")
+
+
+def _check_combined_sinkhorn_log_chunked_matches_reference():
+    """Sanity check: chunked combined result should match the dense _combine_cost_matrices + solve_ot path."""
+    from types import SimpleNamespace
+    from src.distances.combined_ot_distance import _combine_cost_matrices
+    torch.manual_seed(1)
+    src1, tgt1, src2, tgt2 = torch.rand(50, 8), torch.rand(130, 8), torch.rand(50, 4), torch.rand(130, 4)
+    cost_args1 = SimpleNamespace(metric="cosine", normalize_cost="max_per_domain")
+    cost_args2 = SimpleNamespace(metric="cosine", normalize_cost="max_per_domain")
+    ot_args = SimpleNamespace(reg_e=0.05, max_iter=1000, stop_thr=1e-9, lambda_param=0.5, normalize_after=True)
+    combined = _combine_cost_matrices(src1, tgt1, src2, tgt2, cost_args1, cost_args2, ot_args)
+    a, b = uniform_weights(50, "cpu"), uniform_weights(130, "cpu")
+    ref = _sinkhorn2(a, b, combined, "sinkhorn_log", ot_args)
+    got = combined_sinkhorn_log_chunked(src1, tgt1, src2, tgt2, cost_args1, cost_args2, ot_args, chunk_size=17)
+    assert abs(ref - got) < 1e-4, f"combined chunked sinkhorn diverged: ref={ref:.6f} got={got:.6f}"
+    print(f"OK: combined_sinkhorn_log_chunked matches reference (ref={ref:.6f}, got={got:.6f})")
+
+
 def _sinkhorn2(a, b, cost_matrix, method, ot_args):
     return float(ot.sinkhorn2(a, b, cost_matrix, method=method, reg=ot_args.reg_e,
                                numItermax=ot_args.max_iter, verbose=False, stopThr=ot_args.stop_thr))
@@ -151,3 +263,8 @@ def solve_ot(a, b, cost_matrix, ot_args) -> float:
     if ot_args.method == "emd":
         return float(ot.emd2(a, b, cost_matrix, verbose=True))
     raise ValueError(f"Unsupported method: {ot_args.method}")
+
+
+if __name__ == "__main__":
+    _check_sinkhorn_log_chunked_matches_reference()
+    _check_combined_sinkhorn_log_chunked_matches_reference()

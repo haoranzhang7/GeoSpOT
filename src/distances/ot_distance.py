@@ -17,25 +17,32 @@ from src.distances.cost_matrix import (compute_cost_matrix, normalize_cost_matri
                                         cost_constants_cache_path, load_cost_constants, compute_and_cache_cost_constants)
 from src.distances.combined_ot_distance import compute_combined_distance
 from src.distances.utils import (save_ot_distance, load_ot_distance, get_ot_distance_cache_path, uniform_weights,
-                                  solve_ot, domain_slice, load_embeddings_and_domains, load_coordinates_and_domains)
+                                  solve_ot, sinkhorn_log_chunked, domain_slice, load_embeddings_and_domains,
+                                  load_coordinates_and_domains)
 
 NEEDS_GLOBAL_CONSTANTS = ("max", "minmax")
 
 
-def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> float:
-    cost_ab = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
+def _ot(src_embeddings, tgt_embeddings, ot_args) -> float:
+    """Dispatches to the chunked solver for sinkhorn_log (the default; avoids materializing the
+    full N x M cost matrix), falling back to the plain dense solve for the other methods."""
+    if ot_args.method == "sinkhorn_log":
+        return sinkhorn_log_chunked(src_embeddings, tgt_embeddings, ot_args.metric, ot_args)
+    cost = normalize_cost_matrix(compute_cost_matrix(src_embeddings, tgt_embeddings, ot_args.metric), ot_args)
     a = uniform_weights(src_embeddings.shape[0], src_embeddings.device)
     b = uniform_weights(tgt_embeddings.shape[0], tgt_embeddings.device)
-    ot_ab = solve_ot(a, b, cost_ab, ot_args)
+    return solve_ot(a, b, cost, ot_args)
+
+
+def compute_ot_distance(src_embeddings, tgt_embeddings, ot_args) -> float:
+    ot_ab = _ot(src_embeddings, tgt_embeddings, ot_args)
     if not ot_args.debiased:
         return ot_ab
     # Sinkhorn divergence S_eps(a,b) = OT_eps(a,b) - 0.5*OT_eps(a,a) - 0.5*OT_eps(b,b) corrects
     # entropic OT's regularization bias; with "max_per_domain" normalization the cancellation is
     # only approximate since each term is scaled by its own local max.
-    cost_aa = normalize_cost_matrix(compute_cost_matrix(src_embeddings, src_embeddings, ot_args.metric), ot_args)
-    cost_bb = normalize_cost_matrix(compute_cost_matrix(tgt_embeddings, tgt_embeddings, ot_args.metric), ot_args)
-    ot_aa = solve_ot(a, a, cost_aa, ot_args)
-    ot_bb = solve_ot(b, b, cost_bb, ot_args)
+    ot_aa = _ot(src_embeddings, src_embeddings, ot_args)
+    ot_bb = _ot(tgt_embeddings, tgt_embeddings, ot_args)
     return ot_ab - 0.5 * (ot_aa + ot_bb)
 
 
@@ -331,6 +338,25 @@ def cleanup_source_data(src_data, data_source):
     torch.cuda.empty_cache()
     gc.collect()
 
+def is_already_computed(result_dir, embedding_type, source_domain_idx, k, total_domains, method_suffix, config_suffix) -> bool:
+    """Skip a source domain (and the embedding load it needs) if its output is already saved."""
+    if k == 1:
+        path = result_dir / f"ot_distance_matrix_{embedding_type}_{method_suffix}_{config_suffix}.csv"
+        if not path.exists():
+            return False
+        matrix = pd.read_csv(path, index_col=0)
+        matrix.index = matrix.index.astype(str)
+        src_key = str(source_domain_idx)
+        cols = [str(i) for i in range(total_domains)]
+        return src_key in matrix.index and matrix.loc[src_key].reindex(cols).notna().all()
+    if method_suffix != "greedy":
+        return False
+    path = result_dir / f"distances_k{k}_{embedding_type}_{method_suffix}_{config_suffix}.csv"
+    if not path.exists():
+        return False
+    df = pd.read_csv(path)
+    return ((df["src_domain_idx"].astype(str) == str(source_domain_idx)) & (df["k"] == k) & df["greedy_sequential"]).any()
+
 def main(args):
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     source_domain_indices = [s if s == "all" else int(s) for s in args.source_domain_idx.split(",")]
@@ -339,6 +365,8 @@ def main(args):
     all_domain_indices = list(range(args.total_domains))
     metric_to_use = "geodesic" if embedding_type == "geodesic" else args.metric
 
+    result_dir = get_result_dir(args)
+    method_suffix = "greedy" if args.greedy_sequential else "all_combinations"
     cache = {}
     for lambda_param in lambda_values:
         config_suffix = f"method_{args.method}_reg_{args.reg_e}_iter_{args.max_iter}_metric_{metric_to_use}_norm_{args.normalize_cost}"
@@ -348,19 +376,22 @@ def main(args):
             config_suffix += f"_lambda_{lambda_param}"
 
         for source_domain_idx in source_domain_indices:
+            if not args.force_recompute and is_already_computed(
+                    result_dir, embedding_type, source_domain_idx, k, args.total_domains, method_suffix, config_suffix):
+                print(f"[INFO] {embedding_type} src={source_domain_idx} k={k} already computed, skipping")
+                continue
+
             src_data, data_source, domains_source, max_const, min_const = load_source_data(
                 args, device, source_domain_idx, embedding_type, cache=cache)
 
             if args.greedy_sequential:
                 records = run_greedy_sequential(args, src_data, all_domain_indices, data_source, domains_source, embedding_type,
                                                  max_const, min_const, source_domain_idx, k, lambda_param)
-                method_suffix = "greedy"
             else:
                 records = run_all_combinations(args, src_data, data_source, domains_source, all_domain_indices, embedding_type,
                                                 max_const, min_const, source_domain_idx, k, lambda_param)
-                method_suffix = "all_combinations"
 
-            save_records(records, get_result_dir(args), source_domain_idx, k, args.total_domains, embedding_type, method_suffix, config_suffix)
+            save_records(records, result_dir, source_domain_idx, k, args.total_domains, embedding_type, method_suffix, config_suffix)
             cleanup_source_data(src_data, None)
 
 if __name__ == "__main__":

@@ -38,23 +38,9 @@ is_done() {
     grep -ql "Training completed in" "$dir"/pretrain_countries_bert_singlelabel${suf}_seed${s}_*.log 2>/dev/null
 }
 
-# Precompute every OT distance file the array below can need
-compute_distances() {
-    local tgt=$1 k=$2 emb=$3 lam=$4
-    local args=(--dataset-name geoyfcc_text --embedding-type "$emb" --source-domain-idx "$tgt"
-                --total-domains 62 --k "$k" --method sinkhorn_log --reg-e 0.01 --max-iter 1000
-                --metric cosine --normalize-cost max_per_domain)
-    [ "$k" -gt 1 ] && args+=(--greedy-sequential)
-    [ -n "$lam" ] && args+=(--lambda "$lam")
-    python src/distances/ot_distance.py "${args[@]}"
-}
-
 if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
-    for tgt in "${TARGETS[@]}"; do for k in "${K_VALUES[@]}"; do
-        for e in "${EMBS[@]}"; do compute_distances "$tgt" "$k" "$e" ""; done
-        for e in "${LOC_EMBS[@]}"; do compute_distances "$tgt" "$k" "${e}+bert" "$LAMBDA"; done
-    done; done
-
+    # OT distances are precomputed separately by 07_compute_ot_distances_subset_selection.sh --
+    # run it (and experiments/check_subset_selection_data.py to confirm coverage) before this.
     IDX=()
     for i in "${!JOBS[@]}"; do read -r tgt k b s m e lam <<< "${JOBS[$i]}"; is_done "$tgt" "$k" "$b" "$s" "$m" "$e" "$lam" || IDX+=("$i"); done
     echo "${#IDX[@]}/${#JOBS[@]} jobs remaining"

@@ -30,8 +30,11 @@ EMBEDDING_COLORS = {
     'bert': 'mediumorchid',
     'geoclip': 'cornflowerblue',
     'satclip': 'green',
-    'geodesic': 'darkorange',
+    'geodesic': 'crimson',
 }
+# Embedding types that are actual GeoSpOT location embeddings, as opposed to content
+# embeddings (bert) or the non-learned geodesic baseline -- used to label x-axes correctly.
+GEOSPOT_EMBEDDING_TYPES = {'geoclip', 'satclip'}
 
 
 def load_distance_matrix(distance_file, distance_type):
