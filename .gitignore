@@ -5,6 +5,7 @@
 plot/plots/
 
 location_embeddings/satclip/
+greedy_sequential_distances/
 
 **__pycache__**
 
