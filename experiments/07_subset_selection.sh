@@ -6,7 +6,8 @@ OT_DISTANCE_DIR="./data/geoyfcc_text/distances/ot_distance/"
 CHECKPOINT_ROOT="./results/subset/checkpoints"
 LOG_ROOT="./results/subset/logs"
 
-TARGETS=(57 12); K_VALUES=(1 2 5); BUDGET_VALUES=(2000)  # TODO: add 5000, 10000 back once the 2000 grid is done
+TARGETS=(57 12); K_VALUES=(1 2)  # TODO: add 5 back once slurm job 32687664 (tgt57,K5,budget2000) finishes -- it's still training satclip/geodesic/geoclip+bert/satclip+bert/geodesic+bert, and resubmitting those now would duplicate that work
+BUDGET_VALUES=(2000)
 SEEDS=(6651033 9272605 1206448 2180968 114325)
 REST_EMBS=(geoclip satclip); REST_LOC_EMBS=(geoclip satclip)  # run before the priority group below
 PRIORITY_EMBS=(bert geodesic); PRIORITY_LOC_EMBS=(geodesic); LAMBDA=0.5  # '+bert' pair order must match 16_...sh (it's in the CSV filename)
@@ -14,7 +15,7 @@ PRIORITY_EMBS=(bert geodesic); PRIORITY_LOC_EMBS=(geodesic); LAMBDA=0.5  # '+ber
 # This machine runs shard 0 of SHARD_COUNT; the cluster (07_subset_selection_slurm.sh) excludes
 # shard 0 and covers the rest. Both scripts build the exact same JOBS grid/order below, so the
 # shard split lines up and nothing gets run twice. Lower SHARD_COUNT to give this machine more.
-SHARD_COUNT=8
+SHARD_COUNT=2
 SHARD_ID=0
 
 # Seeds are the outermost loop so each seed finishes across every config before the next seed
