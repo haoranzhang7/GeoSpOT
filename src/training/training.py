@@ -210,8 +210,6 @@ def train_text(model, dataloader, criterion, optimizer, device):
             top5_correct += topk_acc['top5']
             total_predictions += labels.size(0)
 
-        torch.cuda.empty_cache()
-    
     avg_loss = total_loss / len(dataloader)
     accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
 
@@ -253,8 +251,6 @@ def train_text_grad_accumulation(model, dataloader, k_val, criterion, optimizer,
             top5_correct += topk_acc['top5']
             total_predictions += labels.size(0)
 
-        torch.cuda.empty_cache()
-    
     avg_loss = total_loss / len(dataloader)
     accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
 
@@ -282,8 +278,6 @@ def eval_text(model, dataloader, device):
             top3_correct += topk_acc['top3']
             top5_correct += topk_acc['top5']
             total_predictions += labels.size(0)
-
-            torch.cuda.empty_cache()
 
     accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
     return total_predictions, accuracy, top3_correct, top5_correct

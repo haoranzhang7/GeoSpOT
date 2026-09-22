@@ -13,6 +13,7 @@ import transformers
 from transformers import BertTokenizer
 
 import sys
+import functools
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
@@ -166,17 +167,22 @@ def get_domain_dataloader(dataset_name, dataset, tokenizer_type, mask, batch_siz
 
 
     domain_dataloader = DataLoader(
-        domain_subset, 
-        shuffle=shuffle, 
-        sampler=None, 
-        collate_fn=collate_fn, 
-        batch_size=batch_size, 
-        num_workers=num_workers, 
-        pin_memory=pin_memory, 
-        worker_init_fn=worker_init_fn, 
-        generator=generator
+        domain_subset,
+        shuffle=shuffle,
+        sampler=None,
+        collate_fn=collate_fn,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        worker_init_fn=worker_init_fn,
+        generator=generator,
+        persistent_workers=num_workers > 0
     )
     return domain_dataloader
+
+@functools.lru_cache(maxsize=None)
+def _get_tokenizer(tokenizer_type: str):
+    return BertTokenizer.from_pretrained(tokenizer_type)
 
 def collate_fn_geoyfcc_text(batch, tokenizer_type, num_labels: int):
     # Ensure batch is always a list (DataLoader may pass a single dict in some worker setups)
@@ -193,7 +199,7 @@ def collate_fn_geoyfcc_text(batch, tokenizer_type, num_labels: int):
             labels[i] = 0
 
     if tokenizer_type == 'bert-base-uncased' or tokenizer_type is None:
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        tokenizer = _get_tokenizer('bert-base-uncased')
         encodings = tokenizer(
             text,
             padding=True,

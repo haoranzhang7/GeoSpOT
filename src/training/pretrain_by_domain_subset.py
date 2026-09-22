@@ -234,13 +234,13 @@ class PretrainSubsetTrainer(BasePretrainTrainer):
         worker_init_fn = functools.partial(seed_worker, model_seed=model_data_seed)
         
         train_dataloader = get_domain_dataloader(
-            dataset_name, dataset, tokenizer_type, train_mask, batch_size=train_batch_size, 
-            shuffle=True, num_workers=16, pin_memory=True, 
+            dataset_name, dataset, tokenizer_type, train_mask, batch_size=train_batch_size,
+            shuffle=True, num_workers=4, pin_memory=True,
             worker_init_fn=worker_init_fn, generator=generator
         )
         val_dataloader = get_domain_dataloader(
-            dataset_name, dataset, tokenizer_type, val_mask, batch_size=eval_batch_size, 
-            shuffle=False, num_workers=16, pin_memory=True, 
+            dataset_name, dataset, tokenizer_type, val_mask, batch_size=eval_batch_size,
+            shuffle=False, num_workers=4, pin_memory=True,
             worker_init_fn=worker_init_fn, generator=generator
         )
         return train_dataloader, val_dataloader
