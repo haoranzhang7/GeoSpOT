@@ -167,7 +167,7 @@ class PretrainSubsetTrainer(BasePretrainTrainer):
         
         return False
     
-    def setup_dataloaders(self, dataset_name, dataset, train_batch_size, pretrain_domain_idx,
+    def setup_dataloaders(self, dataset_name, dataset, pretrain_domain_idx, train_batch_size,
                          eval_batch_size, generator, model_data_seed, exclude_domains=None):
         """Setup train and validation dataloaders with multi-domain subset selection."""
 
