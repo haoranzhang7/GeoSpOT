@@ -55,6 +55,8 @@ for i in "${!JOBS[@]}"; do
     [ $((i % SHARD_COUNT)) -eq "$SHARD_ID" ] || continue
     read -r TGT K BUDGET SEED METHOD EMB LAMBDA_VAL <<< "${JOBS[$i]}"
     is_done "$TGT" "$K" "$BUDGET" "$SEED" "$METHOD" "$EMB" "$LAMBDA_VAL" && continue
+    # geodesic/geodesic+bert are being trained on slurm job 32687664; skip here to avoid duplicating that work
+    [ "$EMB" = geodesic ] || [ "$EMB" = "geodesic+bert" ] && continue
 
     RUN=(-s "$SEED" --subset_size "$BUDGET" --val_subset_size $((BUDGET / 2)) --num_domains "$K" --tgt_domain "$TGT")
     if [ "$METHOD" = ot ]; then
