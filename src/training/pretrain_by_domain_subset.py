@@ -179,6 +179,8 @@ class PretrainSubsetTrainer(BasePretrainTrainer):
             if self.tgt_domain is None:
                 raise ValueError("tgt_domain must be provided when domain_selection_method='in_distribution'")
             specific_domain = self.tgt_domain
+        elif self.tgt_domain not in (None, "all"):
+            exclude_domains = self.tgt_domain  # never let the target itself be picked as a candidate
 
         self.candidate_domains = choose_candidate_domains(
             all_domains=all_domains,

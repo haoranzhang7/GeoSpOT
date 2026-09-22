@@ -329,7 +329,7 @@ class BasePretrainTrainer:
 
             if self.early_stopper(val_acc, epoch+1, self.model, self.optimizer):
                 print(f"Improvement is not observed for the past {self.early_stopper.patience} epochs. Early Stopping...")
-                print(f"Loading Best Model Checkpoint from epoch {self.early_stopper.best_epoch} with validation loss {self.early_stopper.best_metric:.4f}")
+                print(f"Loading Best Model Checkpoint from epoch {self.early_stopper.best_epoch} with validation accuracy {-self.early_stopper.best_metric:.4f}")
                 self.logger.info(f"Improvement is not observed for the past {self.early_stopper.patience} epochs. Early Stopping...")
                 self.logger.info(f"Loading Best Model Checkpoint from epoch {self.early_stopper.best_epoch} with validation accuracy {-self.early_stopper.best_metric:.4f}")
                 break
