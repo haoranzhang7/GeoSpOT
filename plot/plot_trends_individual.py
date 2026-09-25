@@ -25,7 +25,8 @@ def main(args):
     plot_filepath = os.path.join(args.output_dir, f"trend_{args.distance_type}_{args.metric}_{tags}.png")
 
     fig, ax = plt.subplots(1, 1, figsize=tuple(args.figsize))
-    rho, p_value, r2, n_pairs = scatter_regplot(ax, combined_df, x_title, y_title, color)
+    rho, p_value, r2, n_pairs = scatter_regplot(ax, combined_df, x_title, y_title, color,
+                                                 label_fontsize=42, tick_fontsize=34, legend_fontsize=40)
     plt.tight_layout()
     fig.savefig(plot_filepath, bbox_inches="tight", dpi=300)
     plt.close()

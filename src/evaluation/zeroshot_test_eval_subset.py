@@ -234,6 +234,34 @@ def build_summary_row(dataset_name, target_domain_idx, target_domain_label, subs
     return row
 
 
+# Columns that uniquely identify one (config, seed) evaluation in the summary CSV, used to
+# skip re-running an eval that's already recorded there.
+SUMMARY_KEY_COLUMNS = ["dataset_name", "tgt_domain_idx", "select_by", "num_select", "budget",
+                       "model_seed", "ot_embedding_type", "ot_lambda", "test_subset_size"]
+
+
+def _normalize_key_value(v):
+    """Coerce a value (possibly read back from CSV as str/float/NaN) to a stable, comparable form."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    return str(v)
+
+
+def summary_row_key(row):
+    return tuple(_normalize_key_value(row.get(col)) for col in SUMMARY_KEY_COLUMNS)
+
+
+def load_existing_summary_keys(summary_csv_path):
+    """Keys of every (config, seed) evaluation already recorded in the summary CSV."""
+    if not summary_csv_path or not os.path.exists(summary_csv_path):
+        return set()
+    try:
+        df = pd.read_csv(summary_csv_path)
+    except Exception:
+        return set()
+    return {summary_row_key(row) for _, row in df.iterrows()}
+
+
 def save_results(results_all_seed, results_all_seed_with_preds, target_domain_idx,
                 task_name, spatial_split_types, model_name, subset_params,
                 CSV_DIR, JSON_DIR, PKL_DIR, logger, test_subset_size=None):
@@ -287,6 +315,10 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
     dataset/shared_dataloaders/logger let a caller amortize dataset loading and
     test dataloader construction across many subset_params configs (see
     zeroshot_test_eval_subset_grid.py) instead of redoing both per config.
+
+    By default, evaluates on the entire test split for the target domain. Pass
+    --test_subset_size to subsample it instead (e.g. to reproduce the old
+    behavior of matching the checkpoint's val_subset_size).
     """
 
     task_name = "zeroshot_eval_subset"
@@ -329,6 +361,10 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
         spatial_split_types=spatial_split_types,
         model_name=model_name,
     )
+    # One row per (config, seed) eval already recorded in the organized summary CSV; used below
+    # to skip re-running an eval that's already there instead of relying only on the per-config
+    # CSV/pickle (which this same run also writes and checks).
+    existing_summary_keys = load_existing_summary_keys(summary_csv_path)
 
     # Setup logging (skip if a shared logger was passed in by a grid caller)
     if logger is None:
@@ -347,7 +383,8 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
 
     eval_batch_size = args.eval_batch_size
     model_data_seeds = args.seeds
-    test_subset_size = args.test_subset_size if args.test_subset_size is not None else subset_params.get('val_subset_size')
+    # Default to the entire test split; only subsample when explicitly requested.
+    test_subset_size = args.test_subset_size
 
     # If tgt_domain is specified in subset_params, only evaluate on that domain
     # Otherwise, evaluate on all target_domain_idxs
@@ -422,7 +459,23 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
                 print(f"Skipping model/data seed {model_data_seed} as it already exists in CSV")
                 logger.info(f"Skipping model/data seed {model_data_seed} as it already exists in CSV")
                 continue
-            
+
+            candidate_key = summary_row_key({
+                "dataset_name": dataset_name,
+                "tgt_domain_idx": target_domain_idx,
+                "select_by": subset_params.get('domain_selection_method') or 'unknown',
+                "num_select": subset_params.get('num_domains'),
+                "budget": subset_params.get('subset_size'),
+                "model_seed": model_data_seed,
+                "ot_embedding_type": subset_params.get('ot_embedding_type'),
+                "ot_lambda": subset_params.get('ot_lambda'),
+                "test_subset_size": test_subset_size,
+            })
+            if candidate_key in existing_summary_keys:
+                print(f"Skipping model/data seed {model_data_seed} as it already exists in summary CSV {summary_csv_path}")
+                logger.info(f"Skipping model/data seed {model_data_seed} as it already exists in summary CSV {summary_csv_path}")
+                continue
+
             print(f"Loading model {model_name} with seed {model_data_seed}...")
             logger.info(f"Loading model {model_name} with seed {model_data_seed}...")
             
@@ -522,6 +575,7 @@ def main(args, target_domain_idxs, subset_params, summary_csv_override=None,
                 test_subset_size=test_subset_size,
             )
             append_summary_row(summary_csv_path, summary_row)
+            existing_summary_keys.add(candidate_key)
 
         # Save results
         if len(results_all_seed) > len(existing_seeds):
@@ -557,7 +611,8 @@ if __name__ == '__main__':
     parser.add_argument('--eval_batch_size', type=int, default=512)
     parser.add_argument('--test_subset_size', type=int,
                         help="Randomly subsample the test set to this many examples (seeded, so the same "
-                             "subset is reused across models). Defaults to the checkpoint's val_subset_size.")
+                             "subset is reused across models). Default (unset) is to evaluate on the entire "
+                             "test split for the target domain.")
     parser.add_argument('--seeds', type=int, nargs="+", default=[48329, 17046, 62984, 31507, 90861])
     parser.add_argument('--summary_csv', type=str, help='Optional path to summary CSV file')
 

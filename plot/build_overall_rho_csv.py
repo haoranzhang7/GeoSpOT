@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, bootstrap
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
@@ -29,9 +29,12 @@ from rho_csv_common import EMBEDDING_TYPES, DISTANCE_TYPES, iter_available_combo
 def compute_overall_rho(distance_file, distance_type, results_df, outlier_domains):
     combined_df = build_combined_df(distance_file, distance_type, results_df, [], outlier_domains)
     rho, p_value = spearmanr(combined_df['dist_value'], combined_df['acc_value'])
+    # BCa bootstrap CI on rho -- scipy's standard, well-tested resampling CI (no closed-form CI for Spearman's rho).
+    ci = bootstrap((combined_df['dist_value'], combined_df['acc_value']),
+                    lambda x, y: spearmanr(x, y).statistic, paired=True, method='BCa').confidence_interval
     linear_reg = LinearRegression().fit(combined_df[['dist_value']], combined_df['acc_value'])
     r2 = r2_score(combined_df['acc_value'], linear_reg.predict(combined_df[['dist_value']]))
-    return rho, p_value, r2, len(combined_df)
+    return rho, p_value, r2, len(combined_df), ci.low, ci.high
 
 
 def main():
@@ -53,8 +56,8 @@ def main():
     for embedding_type, distance_type, distance_file, method, note, lambda_weight in iter_available_combos(
             args.dataset, args.embedding_types, args.distance_types):
         try:
-            rho, p_value, r2, n_pairs = compute_overall_rho(distance_file, distance_type, results_df,
-                                                              args.outlier_domains)
+            rho, p_value, r2, n_pairs, ci_low, ci_high = compute_overall_rho(distance_file, distance_type,
+                                                                              results_df, args.outlier_domains)
         except ValueError as e:
             print(f"[WARNING] {e}, skipping {distance_type}/{embedding_type}")
             continue
@@ -63,12 +66,12 @@ def main():
         rows.append({
             "dataset": args.dataset, "embedding_type": embedding_type, "distance_type": distance_type,
             "method": method or "", "location_embedding": location_embedding, "lambda": lambda_weight,
-            "rho": rho, "abs_rho": abs(rho), "p_value": p_value, "r2": r2,
-            "n_pairs": n_pairs, "distance_file": str(distance_file), "note": note,
+            "rho": rho, "abs_rho": abs(rho), "p_value": p_value, "rho_ci_low": ci_low, "rho_ci_high": ci_high,
+            "r2": r2, "n_pairs": n_pairs, "distance_file": str(distance_file), "note": note,
         })
         label = (f"{embedding_type}/{distance_type}" + (f"/{method}" if method else "")
                  + (f"/lambda={lambda_weight}" if lambda_weight is not None else ""))
-        print(f"{label}: rho={rho:.4f}, p={p_value:.4f}, r2={r2:.4f}, n_pairs={n_pairs} (file={distance_file.name})")
+        print(f"{label}: rho={rho:.4f} [{ci_low:.4f}, {ci_high:.4f}], p={p_value:.4f}, r2={r2:.4f}, n_pairs={n_pairs} (file={distance_file.name})")
 
     out_df = pd.DataFrame(rows)
     out_path = Path(args.out)

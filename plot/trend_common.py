@@ -31,6 +31,11 @@ EMBEDDING_COLORS = {
     'geoclip': 'cornflowerblue',
     'satclip': 'green',
     'geodesic': 'crimson',
+    # Combo (select_by embedding + bert) colors used by subset-selection plots: each is the
+    # midpoint blend of its two component embedding colors above, so it reads as related to both.
+    'geoclip+bert': '#8f75e0',
+    'satclip+bert': '#5d6a6a',
+    'geodesic+bert': '#cb3488',
 }
 # Embedding types that are actual GeoSpOT location embeddings, as opposed to content
 # embeddings (bert) or the non-learned geodesic baseline -- used to label x-axes correctly.

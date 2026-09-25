@@ -11,7 +11,7 @@ SEEDS=(6651033 9272605 1206448 2180968 114325)
 EMBS=(bert geoclip satclip); LOC_EMBS=(geoclip satclip); LAMBDA=0.5
 
 SHARD_COUNT=2
-SHARD_ID=0
+SHARD_ID=1
 
 JOBS=()
 for s in "${SEEDS[@]}"; do for tgt in "${TARGETS[@]}"; do for k in "${K_VALUES[@]}"; do for b in "${BUDGET_VALUES[@]}"; do
@@ -45,7 +45,7 @@ echo "Running shard $SHARD_ID/$SHARD_COUNT: $(( (${#JOBS[@]} + SHARD_COUNT - 1 -
 for i in "${!JOBS[@]}"; do
     [ $((i % SHARD_COUNT)) -eq "$SHARD_ID" ] || continue
     read -r TGT K BUDGET SEED METHOD EMB LAMBDA_VAL <<< "${JOBS[$i]}"
-    is_done "$TGT" "$K" "$BUDGET" "$SEED" "$METHOD" "$EMB" "$LAMBDA_VAL" && continue
+    is_done "$TGT" "$K" "$BUDGET" "$SEED" "$METHOD" "$EMB" "$LAMBDA_VAL" && { echo "Skipping: TGT=$TGT, K=$K, BUDGET=$BUDGET, SEED=$SEED, METHOD=$METHOD, EMB=$EMB, LAMBDA=$LAMBDA_VAL (already done)"; continue; }
     RUN=(-s "$SEED" --subset_size "$BUDGET" --val_subset_size $((BUDGET / 2)) --num_domains "$K" --tgt_domain "$TGT")
     if [ "$METHOD" = ot ]; then
         ARGS=("${COMMON[@]}" "${RUN[@]}" --ot_distance_dir "$OT_DISTANCE_DIR" --domain_selection_method ot
